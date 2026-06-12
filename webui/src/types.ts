@@ -34,6 +34,14 @@ export interface SettingsView {
     ipat_dry_run: boolean;
     ipat_credentials_configured: boolean;
   };
+  env_settings: EnvSetting[];
+}
+
+export interface EnvSetting {
+  key: string;
+  label: string;
+  value: string | number | boolean;
+  secret?: boolean;
 }
 
 export interface Overview {
@@ -68,6 +76,14 @@ export interface RaceSummary {
   finished: boolean;
   top_prediction: TopPrediction | null;
   bet_count: number;
+}
+
+export interface RacesResponse {
+  races: RaceSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  venues: string[];
 }
 
 export interface RaceEntry {

@@ -6,6 +6,9 @@ load_dotenv()
 
 
 class Settings:
+    POSTGRES_USER: str = os.environ.get("POSTGRES_USER", "horse")
+    POSTGRES_PASSWORD: str = os.environ.get("POSTGRES_PASSWORD", "horse")
+    POSTGRES_DB: str = os.environ.get("POSTGRES_DB", "horse_racing")
     DATABASE_URL: str = os.environ.get(
         "DATABASE_URL",
         "postgresql+psycopg2://horse:horse@db:5432/horse_racing",

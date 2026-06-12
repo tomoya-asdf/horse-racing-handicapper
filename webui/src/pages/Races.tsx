@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { getJSON, formatDateTime } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
-import type { RaceDetail, RaceSummary } from "../types";
+import type { RaceDetail, RacesResponse } from "../types";
 
 const PAGE_SIZE = 50;
 
@@ -126,13 +126,30 @@ function RaceDetailView({ raceId }: { raceId: number }) {
 
 export default function RacesPage() {
   const [page, setPage] = useState(0);
+  const [filters, setFilters] = useState({
+    race_name: "",
+    race_date: "",
+    venue: "",
+    status: "",
+    horse_name: "",
+    jockey: "",
+    prediction: "",
+    bet: "",
+  });
   const offset = page * PAGE_SIZE;
-  const { data, error } = usePolling<{
-    races: RaceSummary[];
-    total: number;
-    limit: number;
-    offset: number;
-  }>(() => getJSON(`/api/races?limit=${PAGE_SIZE}&offset=${offset}`), 30000, [offset]);
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String(offset),
+  });
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  const query = params.toString();
+  const { data, error } = usePolling<RacesResponse>(
+    () => getJSON(`/api/races?${query}`),
+    30000,
+    [query]
+  );
   const [openId, setOpenId] = useState<number | null>(null);
   const total = data?.total ?? 0;
   const rowCount = data?.races.length ?? 0;
@@ -143,6 +160,25 @@ export default function RacesPage() {
   const changePage = (nextPage: number) => {
     setOpenId(null);
     setPage(nextPage);
+  };
+  const updateFilter = (key: keyof typeof filters, value: string) => {
+    setOpenId(null);
+    setPage(0);
+    setFilters((current) => ({ ...current, [key]: value }));
+  };
+  const clearFilters = () => {
+    setOpenId(null);
+    setPage(0);
+    setFilters({
+      race_name: "",
+      race_date: "",
+      venue: "",
+      status: "",
+      horse_name: "",
+      jockey: "",
+      prediction: "",
+      bet: "",
+    });
   };
 
   if (error) return <ErrorNote message={error} />;
@@ -165,6 +201,82 @@ export default function RacesPage() {
         </div>
       </div>
       <h2>レース一覧(50件ずつ表示)</h2>
+      <div className="race-filters">
+        <label>
+          <span>レース名</span>
+          <input
+            value={filters.race_name}
+            onChange={(e) => updateFilter("race_name", e.target.value)}
+            placeholder="レース名で検索"
+          />
+        </label>
+        <label>
+          <span>日付</span>
+          <input
+            type="date"
+            value={filters.race_date}
+            onChange={(e) => updateFilter("race_date", e.target.value)}
+          />
+        </label>
+        <label>
+          <span>競馬場</span>
+          <select value={filters.venue} onChange={(e) => updateFilter("venue", e.target.value)}>
+            <option value="">すべて</option>
+            {(data?.venues ?? []).map((venue) => (
+              <option key={venue} value={venue}>
+                {venue}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>状態</span>
+          <select value={filters.status} onChange={(e) => updateFilter("status", e.target.value)}>
+            <option value="">すべて</option>
+            <option value="upcoming">発走前</option>
+            <option value="finished">確定</option>
+            <option value="unfinished">未確定</option>
+          </select>
+        </label>
+        <label>
+          <span>馬名</span>
+          <input
+            value={filters.horse_name}
+            onChange={(e) => updateFilter("horse_name", e.target.value)}
+            placeholder="馬名で絞り込み"
+          />
+        </label>
+        <label>
+          <span>騎手</span>
+          <input
+            value={filters.jockey}
+            onChange={(e) => updateFilter("jockey", e.target.value)}
+            placeholder="騎手名で絞り込み"
+          />
+        </label>
+        <label>
+          <span>予測</span>
+          <select
+            value={filters.prediction}
+            onChange={(e) => updateFilter("prediction", e.target.value)}
+          >
+            <option value="">すべて</option>
+            <option value="yes">予測あり</option>
+            <option value="no">予測なし</option>
+          </select>
+        </label>
+        <label>
+          <span>賭け</span>
+          <select value={filters.bet} onChange={(e) => updateFilter("bet", e.target.value)}>
+            <option value="">すべて</option>
+            <option value="yes">賭けあり</option>
+            <option value="no">賭けなし</option>
+          </select>
+        </label>
+        <button className="secondary" onClick={clearFilters}>
+          クリア
+        </button>
+      </div>
       <table className="table">
         <thead>
           <tr>

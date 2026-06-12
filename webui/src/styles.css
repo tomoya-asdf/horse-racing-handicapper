@@ -500,6 +500,46 @@ h2 {
   opacity: 0.45;
 }
 
+.race-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  align-items: end;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.race-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.race-filters label span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.race-filters input,
+.race-filters select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 14px;
+  min-width: 0;
+}
+
+.race-filters input:focus,
+.race-filters select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* 賭け履歴 */
 .page-header {
   display: flex;
@@ -596,4 +636,28 @@ button.primary:hover {
 button.primary:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+button.secondary {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+button.secondary:hover {
+  border-color: var(--accent);
+}
+
+.settings-env-table {
+  max-width: 820px;
+}
+
+.env-key {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
 }

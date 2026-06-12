@@ -164,20 +164,69 @@ def overview() -> dict:
 
 
 @app.get("/api/races")
-def list_races(limit: int = 30, offset: int = 0) -> dict:
+def list_races(
+    limit: int = 30,
+    offset: int = 0,
+    race_name: str | None = None,
+    race_date: str | None = None,
+    venue: str | None = None,
+    status: str | None = None,
+    horse_name: str | None = None,
+    jockey: str | None = None,
+    prediction: str | None = None,
+    bet: str | None = None,
+) -> dict:
     page_limit = min(max(limit, 1), 200)
     page_offset = max(offset, 0)
     session = get_session()
     try:
-        total = session.query(func.count(Race.id)).scalar() or 0
+        venues = [
+            row[0]
+            for row in session.query(Race.venue)
+            .filter(Race.venue.isnot(None))
+            .distinct()
+            .order_by(Race.venue)
+            .all()
+        ]
+        query = session.query(Race)
+        if race_name:
+            query = query.filter(Race.race_name.ilike(f"%{race_name.strip()}%"))
+        if race_date:
+            try:
+                parsed_date = datetime.strptime(race_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="race_date は YYYY-MM-DD で指定してください")
+            query = query.filter(Race.race_date == parsed_date)
+        if venue:
+            query = query.filter(Race.venue == venue.strip())
+        if status == "finished":
+            query = query.filter(Race.entries.any(Entry.finish_position.isnot(None)))
+        elif status == "unfinished":
+            query = query.filter(~Race.entries.any(Entry.finish_position.isnot(None)))
+        elif status == "upcoming":
+            query = query.filter(Race.start_time.isnot(None), Race.start_time > now_jst())
+        if horse_name:
+            query = query.filter(Race.entries.any(Entry.horse_name.ilike(f"%{horse_name.strip()}%")))
+        if jockey:
+            query = query.filter(Race.entries.any(Entry.jockey.ilike(f"%{jockey.strip()}%")))
+        if prediction == "yes":
+            query = query.filter(Race.predictions.any())
+        elif prediction == "no":
+            query = query.filter(~Race.predictions.any())
+        if bet == "yes":
+            query = query.filter(Race.bets.any())
+        elif bet == "no":
+            query = query.filter(~Race.bets.any())
+
+        query = query.distinct()
+        total = query.with_entities(func.count(func.distinct(Race.id))).scalar() or 0
         races = (
-            session.query(Race)
-            .options(
+            query.options(
                 selectinload(Race.entries),
                 selectinload(Race.predictions),
                 selectinload(Race.bets),
             )
-            .order_by(Race.race_date.desc(), Race.start_time.desc())
+            .order_by(Race.race_date.desc(), Race.start_time.desc(), Race.id.desc())
             .offset(page_offset)
             .limit(page_limit)
             .all()
@@ -217,7 +266,13 @@ def list_races(limit: int = 30, offset: int = 0) -> dict:
             )
     finally:
         session.close()
-    return {"races": items, "total": total, "limit": page_limit, "offset": page_offset}
+    return {
+        "races": items,
+        "total": total,
+        "limit": page_limit,
+        "offset": page_offset,
+        "venues": venues,
+    }
 
 
 @app.get("/api/races/{race_id}")
