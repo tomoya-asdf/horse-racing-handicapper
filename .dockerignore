@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.venv
+data
+docs
+README.md
+**/__pycache__
+*.pyc
+webui/node_modules
+webui/dist

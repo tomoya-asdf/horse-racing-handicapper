@@ -1,0 +1,28 @@
+# フロントエンド(React)のビルド
+FROM node:20-alpine AS frontend
+
+WORKDIR /build
+COPY webui/package.json ./
+RUN npm install
+COPY webui/ ./
+RUN npm run build
+
+# バックエンド(FastAPI) + ビルド済みフロントエンドの配信
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Tokyo
+
+COPY docker/requirements.txt docker/requirements-api.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-api.txt
+
+COPY src ./src
+COPY --from=frontend /build/dist ./webui/dist
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

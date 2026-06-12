@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-horse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-horse}
+      POSTGRES_DB: ${POSTGRES_DB:-horse_racing}
+      TZ: Asia/Tokyo
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      # 認証情報が弱い既定値のため、ホストのループバックのみに公開する
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  collector:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    command: python -m src.collector.main
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+
+  predictor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.predictor
+    restart: unless-stopped
+    command: python -m src.predictor.main
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+
+  webui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webui
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # 賭け履歴・操作系を含むため、ホストのループバックのみに公開する
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  db_data:
