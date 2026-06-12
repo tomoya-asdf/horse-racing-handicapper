@@ -29,11 +29,13 @@ class BetStatus(str, Enum):
     - PENDING: prodモードで購入操作の開始前に記録された状態。購入の途中で
       プロセスが落ちた場合はこの状態のまま残る(購入されたかは要手動確認)。
     - PLACED: simモードでの記録、またはprodモードで購入操作が成功した状態。
+    - DRY_RUN: prodモードだがIPAT_DRY_RUN=trueのため実購入しなかった状態。
     - FAILED: prodモードで購入操作が失敗した状態(実際のお金は動いていない)。
     """
 
     PENDING = "pending"
     PLACED = "placed"
+    DRY_RUN = "dry_run"
     FAILED = "failed"
 
 
@@ -108,7 +110,7 @@ class JobRun(Base):
     __tablename__ = "job_runs"
 
     id = Column(Integer, primary_key=True)
-    job_name = Column(String(20), nullable=False)  # collect / backfill / predict / settle / train
+    job_name = Column(String(20), nullable=False)  # collect / backfill / predict / bet_decide / settle / train
     trigger = Column(String(10), nullable=False)
     status = Column(String(10), nullable=False)
     params = Column(String)  # ジョブへの引数(JSON)。backfillの日付範囲など

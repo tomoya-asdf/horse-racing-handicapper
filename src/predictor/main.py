@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def _is_unfinished_race(race: Race) -> bool:
-    return bool(race.entries) and any(entry.finish_position is None for entry in race.entries)
+    if not race.entries:
+        return False
+    if any(entry.finish_position is not None for entry in race.entries):
+        return False
+    return race.start_time is not None and race.start_time > now_jst()
 
 
 def _has_complete_odds(race: Race) -> bool:
@@ -80,7 +84,9 @@ def _place_bets(session, bets: list[Bet], config: BettingConfig) -> int:
     for bet in bets:
         try:
             betting.place_bet_production(bet)
-            bet.status = BetStatus.PLACED.value
+            bet.status = (
+                BetStatus.DRY_RUN.value if settings.IPAT_DRY_RUN else BetStatus.PLACED.value
+            )
         except Exception:
             bet.status = BetStatus.FAILED.value
             logger.exception("failed to place production bet: bet_id=%s", bet.id)
@@ -102,7 +108,12 @@ def _run_predict(params: dict) -> str:
     try:
         races = (
             session.query(Race)
-            .filter(Race.entries.any(Entry.finish_position.is_(None)))
+            .filter(
+                Race.entries.any(),
+                ~Race.entries.any(Entry.finish_position.isnot(None)),
+                Race.start_time.isnot(None),
+                Race.start_time > now_jst(),
+            )
             .all()
         )
         for race in races:
@@ -158,7 +169,8 @@ def _run_bet_decide(params: dict) -> str:
                 Race.start_time > now,
                 Race.start_time
                 <= now + timedelta(minutes=settings.BET_DECISION_WINDOW_MINUTES),
-                Race.entries.any(Entry.finish_position.is_(None)),
+                Race.entries.any(),
+                ~Race.entries.any(Entry.finish_position.isnot(None)),
             )
             .all()
         )

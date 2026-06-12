@@ -16,7 +16,7 @@ def settle_pending_races() -> int:
     """未確定の bets に payout / is_settled を反映し、決済できた件数を返す。
 
     決済対象は購入が成立した賭け(status=placed)のみ。pending(購入結果不明)・
-    failed(購入失敗)は対象外とし、回収率の集計を汚さないようにする。
+    dry_run(実購入なし)・failed(購入失敗)は対象外とし、回収率の集計を汚さないようにする。
     """
     settled_count = 0
     session = get_session()

@@ -5,6 +5,7 @@ export interface BetStats {
   settled_count: number;
   unsettled_count: number;
   pending_count: number;
+  dry_run_count: number;
   failed_count: number;
 }
 

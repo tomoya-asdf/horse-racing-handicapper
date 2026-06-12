@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
-from src.common.dynamic_config import get_settings_view, save_settings
+from src.common.dynamic_config import get_settings_view, load_betting_config, save_settings
 from src.common.models import Bet, BetStatus, BettingMode, Entry, JobRun, Prediction, Race
 from src.common.timeutils import now_jst
 from src.predictor.model import MODEL_PATH
@@ -67,6 +67,7 @@ def _bet_stats(bets: list[Bet]) -> dict:
         "settled_count": len(settled),
         "unsettled_count": len(placed) - len(settled),
         "pending_count": sum(1 for b in bets if b.status == BetStatus.PENDING.value),
+        "dry_run_count": sum(1 for b in bets if b.status == BetStatus.DRY_RUN.value),
         "failed_count": sum(1 for b in bets if b.status == BetStatus.FAILED.value),
     }
 
@@ -261,7 +262,11 @@ def list_races(
         if status == "finished":
             query = query.filter(Race.entries.any(Entry.finish_position.isnot(None)))
         elif status == "unfinished":
-            query = query.filter(~Race.entries.any(Entry.finish_position.isnot(None)))
+            query = query.filter(
+                Race.start_time.isnot(None),
+                Race.start_time > now_jst(),
+                ~Race.entries.any(Entry.finish_position.isnot(None)),
+            )
         elif status == "upcoming":
             query = query.filter(Race.start_time.isnot(None), Race.start_time > now_jst())
         if horse_name:
@@ -362,6 +367,7 @@ def race_detail(race_id: int) -> dict:
                 if p.model_version == model_version
             }
         bet_entry_ids = {b.entry_id for b in race.bets}
+        betting_config = load_betting_config()
         ai_rank_map = _rank_entries(score_map, reverse=True)
         odds_rank_map = _rank_entries(
             {e.id: e.odds for e in race.entries if e.odds is not None and e.odds > 0}
@@ -418,7 +424,10 @@ def race_detail(race_id: int) -> dict:
                 ),
                 "value_label": (
                     "妙味あり"
-                    if e.id in score_map and e.odds is not None and e.odds > 0 and score_map[e.id] * e.odds >= 1.0
+                    if e.id in score_map
+                    and e.odds is not None
+                    and e.odds > 0
+                    and score_map[e.id] * e.odds >= betting_config.min_expected_value
                     else "見送り"
                     if e.id in score_map and e.odds is not None and e.odds > 0
                     else None

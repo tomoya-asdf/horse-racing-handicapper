@@ -70,6 +70,12 @@ export default function BetsPage() {
                     <span>{data.stats.failed_count} 件</span>
                   </div>
                 )}
+                {data.stats.dry_run_count > 0 && (
+                  <div>
+                    <span>dry-run</span>
+                    <span>{data.stats.dry_run_count} 件</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

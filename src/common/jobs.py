@@ -2,7 +2,7 @@
 
 WebUI(API)は ``enqueue()`` で job_runs に status=queued の行を入れるだけで、
 実際の実行は担当サービスが行う(collectorはcollect/backfill、predictorは
-predict/settle/train)。各サービスは ``process_queued()`` を数秒間隔でポーリングし、
+predict/bet_decide/settle/train)。各サービスは ``process_queued()`` を数秒間隔でポーリングし、
 queuedの行をclaimして実行する。スケジュール実行は ``run_scheduled()`` で同じ
 テーブルに記録するため、WebUIから手動・自動を問わず全実行履歴を確認できる。
 

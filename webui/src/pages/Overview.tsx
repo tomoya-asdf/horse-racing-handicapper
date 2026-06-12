@@ -32,6 +32,11 @@ function RecoveryCard({ mode, stats }: { mode: string; stats: BetStats }) {
           購入結果が未確認の賭けが {stats.pending_count} 件あります。IPATの投票履歴を確認してください。
         </div>
       )}
+      {stats.dry_run_count > 0 && (
+        <div className="info-note">
+          dry-runのため実購入していない賭けが {stats.dry_run_count} 件あります。
+        </div>
+      )}
       {stats.failed_count > 0 && (
         <div className="warn-note">購入に失敗した賭けが {stats.failed_count} 件あります。</div>
       )}

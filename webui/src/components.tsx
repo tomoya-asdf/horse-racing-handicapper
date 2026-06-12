@@ -5,6 +5,9 @@ const STATUS_LABELS: Record<string, string> = {
   running: "実行中",
   success: "成功",
   failed: "失敗",
+  pending: "未確認",
+  placed: "購入済み",
+  dry_run: "dry-run",
 };
 
 export function StatusBadge({ status }: { status: string }) {
