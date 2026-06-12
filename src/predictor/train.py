@@ -18,13 +18,20 @@ from sklearn.model_selection import train_test_split
 
 from src.common.db import get_session, init_db
 from src.common.models import Entry, Race
-from src.predictor.features import FEATURE_COLUMNS, build_features
+from src.predictor.features import CATEGORICAL_FEATURES, FEATURE_COLUMNS, build_features
 from src.predictor.model import MODEL_PATH
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MIN_RACES = 20
+
+
+def _prepare_training_data(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    data = pd.concat(frames)
+    for column in CATEGORICAL_FEATURES:
+        data[column] = data[column].astype("category")
+    return data
 
 
 def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame], int]:
@@ -54,7 +61,7 @@ def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame
                 {
                     "horse_number": [e.horse_number for e in entries],
                     "weight": [e.weight for e in entries],
-                    "odds": [e.odds for e in entries],
+                    "jockey": [e.jockey for e in entries],
                 },
                 index=[e.id for e in entries],
             )
@@ -74,7 +81,7 @@ def train_model() -> str:
     if race_count < MIN_RACES:
         return f"学習データ不足(レース数={race_count}, 必要数={MIN_RACES})のためスキップしました"
 
-    data = pd.concat(frames)
+    data = _prepare_training_data(frames)
 
     if data["label"].nunique() < 2:
         return "学習データに1着の記録が無いためスキップしました"
@@ -82,13 +89,17 @@ def train_model() -> str:
     # 検証はレース単位で分割する。同一レースの行を学習と検証の両方に入れると、
     # レース内の相対特徴(odds_rank等)を通じて検証AUCが楽観的になるため
     train_frames, valid_frames = train_test_split(frames, test_size=0.2, random_state=42)
-    train_data = pd.concat(train_frames)
-    valid_data = pd.concat(valid_frames)
+    train_data = _prepare_training_data(train_frames)
+    valid_data = _prepare_training_data(valid_frames)
 
     auc = None
     if train_data["label"].nunique() > 1 and valid_data["label"].nunique() > 1:
         eval_model = LGBMClassifier(objective="binary", random_state=42)
-        eval_model.fit(train_data[FEATURE_COLUMNS], train_data["label"])
+        eval_model.fit(
+            train_data[FEATURE_COLUMNS],
+            train_data["label"],
+            categorical_feature=CATEGORICAL_FEATURES,
+        )
         auc = roc_auc_score(
             valid_data["label"], eval_model.predict_proba(valid_data[FEATURE_COLUMNS])[:, 1]
         )
@@ -96,12 +107,17 @@ def train_model() -> str:
 
     # 保存するモデルは全データで学習する(分割は検証AUCの算出のためだけに使う)
     model = LGBMClassifier(objective="binary", random_state=42)
-    model.fit(data[FEATURE_COLUMNS], data["label"])
+    model.fit(data[FEATURE_COLUMNS], data["label"], categorical_feature=CATEGORICAL_FEATURES)
 
     version = datetime.now().strftime("%Y%m%d-%H%M%S")
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
-        {"model": model, "feature_columns": FEATURE_COLUMNS, "version": version},
+        {
+            "model": model,
+            "feature_columns": FEATURE_COLUMNS,
+            "categorical_features": CATEGORICAL_FEATURES,
+            "version": version,
+        },
         MODEL_PATH,
     )
     summary = f"モデルを保存しました(version={version}, レース={race_count}件, 行数={len(data)}"

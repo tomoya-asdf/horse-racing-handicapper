@@ -5,7 +5,8 @@ import type { JobRun } from "../types";
 
 const JOB_BUTTONS = [
   { name: "collect", label: "データ収集", description: "netkeibaからレース・オッズ・結果を取得" },
-  { name: "predict", label: "予測・賭け判断", description: "発走前レースを予測し賭けを決定" },
+  { name: "predict", label: "AI予想", description: "未確定レースにオッズ不要の予測スコアを作成" },
+  { name: "bet_decide", label: "賭け対象決定", description: "予測とオッズから賭け対象を決定" },
   { name: "settle", label: "決済", description: "確定したレースの払戻を反映" },
   { name: "train", label: "モデル学習", description: "蓄積データからモデルを再学習" },
 ];
@@ -31,7 +32,7 @@ export default function JobsPage() {
       setMessage(
         result.queued
           ? `「${label}」の実行を依頼しました。担当サービスが数秒以内に開始します。`
-          : `「${label}」はすでに実行待ち/実行中です。`
+          : `「${label}」はすでに実行待ち、または実行中です。`
       );
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
@@ -66,7 +67,7 @@ export default function JobsPage() {
       <h2>過去データ取得(バックフィル)</h2>
       <p className="muted">
         初回セットアップ時など、過去の開催日のレース・最終オッズ・確定結果をさかのぼって取得します。
-        モデル学習には結果確定済みレースが20件以上必要です(JRAは主に土日開催。1開催日あたり2〜3分かかります)。
+        モデル学習には結果確定済みレースが20件以上必要です。
       </p>
       <div className="backfill-form">
         <label>

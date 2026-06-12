@@ -28,9 +28,10 @@ Handler = Callable[[dict], "str | None"]
 COLLECT = "collect"  # collector
 BACKFILL = "backfill"  # collector
 PREDICT = "predict"  # predictor
+BET_DECIDE = "bet_decide"  # predictor
 SETTLE = "settle"  # predictor
 TRAIN = "train"  # predictor
-ALL_JOBS = (COLLECT, BACKFILL, PREDICT, SETTLE, TRAIN)
+ALL_JOBS = (COLLECT, BACKFILL, PREDICT, BET_DECIDE, SETTLE, TRAIN)
 
 POLL_INTERVAL_SECONDS = 5
 

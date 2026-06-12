@@ -8,26 +8,33 @@ from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import BettingConfig, load_betting_config
-from src.common.models import Bet, BetStatus, BettingMode, Prediction, Race
+from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race
 from src.common.timeutils import now_jst
 from src.predictor import betting, model, settlement, train
 from src.predictor.features import build_features
 
 logging.basicConfig(level=logging.INFO)
-# 5秒間隔のジョブポーリングがINFOログを埋め尽くすため、APSchedulerのログは抑制する
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+def _is_unfinished_race(race: Race) -> bool:
+    return bool(race.entries) and any(entry.finish_position is None for entry in race.entries)
+
+
+def _has_complete_odds(race: Race) -> bool:
+    return bool(race.entries) and all(entry.odds is not None and entry.odds > 0 for entry in race.entries)
 
 
 def _predict_race(race: Race, model_bundle: dict, session) -> list[Prediction]:
     entries = race.entries
     entries_df = pd.DataFrame(
         {
-            "horse_number": [e.horse_number for e in entries],
-            "weight": [e.weight for e in entries],
-            "odds": [e.odds for e in entries],
+            "horse_number": [entry.horse_number for entry in entries],
+            "weight": [entry.weight for entry in entries],
+            "jockey": [entry.jockey for entry in entries],
         },
-        index=[e.id for e in entries],
+        index=[entry.id for entry in entries],
     )
     scores = model.predict(model_bundle, build_features(entries_df))
 
@@ -44,32 +51,25 @@ def _predict_race(race: Race, model_bundle: dict, session) -> list[Prediction]:
     return predictions
 
 
-def _process_race(session, race: Race, model_bundle: dict, config: BettingConfig) -> int:
-    """1レース分の予測・賭けを行い、新規に成立を試みた賭けの数を返す。"""
-    if not race.entries:
-        return 0
-
-    predictions = (
+def _latest_predictions(session, race_id: int) -> list[Prediction]:
+    latest = (
+        session.query(Prediction.model_version)
+        .filter(Prediction.race_id == race_id)
+        .order_by(Prediction.created_at.desc(), Prediction.id.desc())
+        .first()
+    )
+    if latest is None:
+        return []
+    return (
         session.query(Prediction)
-        .filter_by(race_id=race.id, model_version=model_bundle["version"])
+        .filter_by(race_id=race_id, model_version=latest.model_version)
         .all()
     )
-    if not predictions:
-        predictions = _predict_race(race, model_bundle, session)
 
-    already_bet = (
-        session.query(Bet).filter_by(race_id=race.id, mode=config.mode).first()
-    )
-    if already_bet is not None:
-        session.commit()  # 予測のみ保存
-        return 0
 
+def _place_bets(session, bets: list[Bet], config: BettingConfig) -> int:
     is_prod = config.mode == BettingMode.PROD.value
-    bets = betting.decide_bets(race, predictions, config)
     for bet in bets:
-        # prodでは購入操作の「前」に必ずpendingとしてコミットする。購入の途中で
-        # プロセスが落ちても記録が残り、次回ジョブはalready_bet判定により
-        # 同一レースへの重複購入を行わない(フェイルクローズ)
         bet.status = BetStatus.PENDING.value if is_prod else BetStatus.PLACED.value
         session.add(bet)
     session.commit()
@@ -82,8 +82,6 @@ def _process_race(session, race: Race, model_bundle: dict, config: BettingConfig
             betting.place_bet_production(bet)
             bet.status = BetStatus.PLACED.value
         except Exception:
-            # 失敗した賭けはfailedとして残す(お金は動いていない)。
-            # 決済・回収率の集計からは除外される
             bet.status = BetStatus.FAILED.value
             logger.exception("failed to place production bet: bet_id=%s", bet.id)
         session.commit()
@@ -91,42 +89,118 @@ def _process_race(session, race: Race, model_bundle: dict, config: BettingConfig
 
 
 def _run_predict(params: dict) -> str:
-    config = load_betting_config()
     try:
         model_bundle = model.load_model()
     except FileNotFoundError:
         return "モデル未学習のためスキップしました(ジョブ「モデル学習」を実行してください)"
 
-    new_bets = 0
+    target_races = 0
+    predicted_races = 0
+    skipped_existing = 0
     failed_races = 0
     session = get_session()
     try:
-        # レースは数日先の分まで収集されるが、賭け判断は発走が近いレースに限定する
-        # (収集時点の古いオッズに基づく予測・賭けを避けるため)
-        now = now_jst()
+        races = (
+            session.query(Race)
+            .filter(Race.entries.any(Entry.finish_position.is_(None)))
+            .all()
+        )
+        for race in races:
+            if not _is_unfinished_race(race):
+                continue
+            target_races += 1
+            try:
+                existing = (
+                    session.query(Prediction.id)
+                    .filter_by(race_id=race.id, model_version=model_bundle["version"])
+                    .first()
+                )
+                if existing is not None:
+                    skipped_existing += 1
+                    continue
+                _predict_race(race, model_bundle, session)
+                session.commit()
+                predicted_races += 1
+            except Exception:
+                session.rollback()
+                failed_races += 1
+                logger.exception("failed to predict race_key=%s", race.race_key)
+    finally:
+        session.close()
+
+    summary = (
+        f"対象未確定レース={target_races}件, "
+        f"新規予測={predicted_races}件, "
+        f"既存予測あり={skipped_existing}件"
+    )
+    if failed_races:
+        summary += f", 失敗レース={failed_races}件"
+    return summary
+
+
+def _run_bet_decide(params: dict) -> str:
+    config = load_betting_config()
+    now = now_jst()
+
+    target_races = 0
+    skipped_no_predictions = 0
+    skipped_no_complete_odds = 0
+    skipped_already_bet = 0
+    new_bets = 0
+    failed_races = 0
+
+    session = get_session()
+    try:
         races = (
             session.query(Race)
             .filter(
                 Race.start_time.isnot(None),
                 Race.start_time > now,
-                Race.start_time <= now + timedelta(minutes=settings.BET_WINDOW_MINUTES),
+                Race.start_time
+                <= now + timedelta(minutes=settings.BET_DECISION_WINDOW_MINUTES),
+                Race.entries.any(Entry.finish_position.is_(None)),
             )
             .all()
         )
         for race in races:
+            if not _is_unfinished_race(race):
+                continue
+            target_races += 1
             try:
-                new_bets += _process_race(session, race, model_bundle, config)
+                predictions = _latest_predictions(session, race.id)
+                if not predictions:
+                    skipped_no_predictions += 1
+                    continue
+
+                if not _has_complete_odds(race):
+                    skipped_no_complete_odds += 1
+                    continue
+
+                already_bet = (
+                    session.query(Bet).filter_by(race_id=race.id, mode=config.mode).first()
+                )
+                if already_bet is not None:
+                    skipped_already_bet += 1
+                    continue
+
+                bets = betting.decide_bets(race, predictions, config)
+                if bets:
+                    new_bets += _place_bets(session, bets, config)
             except Exception:
                 session.rollback()
                 failed_races += 1
-                logger.exception("failed to process race_key=%s", race.race_key)
+                logger.exception("failed to decide bets race_key=%s", race.race_key)
     finally:
         session.close()
 
     summary = (
         f"mode={config.mode}, "
-        f"対象レース(発走{settings.BET_WINDOW_MINUTES}分以内)={len(races)}件, "
-        f"新規賭け={new_bets}件"
+        f"対象レース(発走{settings.BET_DECISION_WINDOW_MINUTES}分以内・未確定・オッズ確認対象)="
+        f"{target_races}件, "
+        f"新規賭け={new_bets}件, "
+        f"予測なし={skipped_no_predictions}件, "
+        f"オッズ未入力={skipped_no_complete_odds}件, "
+        f"既存賭けあり={skipped_already_bet}件"
     )
     if failed_races:
         summary += f", 失敗レース={failed_races}件"
@@ -146,6 +220,10 @@ def _scheduled_predict() -> None:
     jobs.run_scheduled(jobs.PREDICT, _run_predict)
 
 
+def _scheduled_bet_decide() -> None:
+    jobs.run_scheduled(jobs.BET_DECIDE, _run_bet_decide)
+
+
 def _scheduled_settle() -> None:
     jobs.run_scheduled(jobs.SETTLE, _run_settle)
 
@@ -154,6 +232,7 @@ def _poll_queued_jobs() -> None:
     jobs.process_queued(
         {
             jobs.PREDICT: _run_predict,
+            jobs.BET_DECIDE: _run_bet_decide,
             jobs.SETTLE: _run_settle,
             jobs.TRAIN: _run_train,
         }
@@ -162,13 +241,15 @@ def _poll_queued_jobs() -> None:
 
 def main() -> None:
     init_db()
-    jobs.recover_stale([jobs.PREDICT, jobs.SETTLE, jobs.TRAIN])
+    jobs.recover_stale([jobs.PREDICT, jobs.BET_DECIDE, jobs.SETTLE, jobs.TRAIN])
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(_scheduled_predict, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
+    scheduler.add_job(_scheduled_bet_decide, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
     scheduler.add_job(_scheduled_settle, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
     scheduler.add_job(_poll_queued_jobs, "interval", seconds=jobs.POLL_INTERVAL_SECONDS)
     logger.info("predictor started")
     _scheduled_predict()
+    _scheduled_bet_decide()
     scheduler.start()
 
 

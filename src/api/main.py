@@ -33,7 +33,8 @@ app = FastAPI(title="競馬予測AI 管理API")
 JOB_LABELS = {
     jobs.COLLECT: "データ収集",
     jobs.BACKFILL: "過去データ取得",
-    jobs.PREDICT: "予測・賭け判断",
+    jobs.PREDICT: "AI予想",
+    jobs.BET_DECIDE: "賭け対象決定",
     jobs.SETTLE: "決済",
     jobs.TRAIN: "モデル学習",
 }

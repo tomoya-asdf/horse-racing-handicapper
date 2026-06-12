@@ -1,20 +1,17 @@
 import pandas as pd
 
-FEATURE_COLUMNS = ["horse_number", "weight", "odds", "implied_prob", "odds_rank", "field_size"]
+FEATURE_COLUMNS = ["horse_number", "weight", "field_size", "jockey"]
+CATEGORICAL_FEATURES = ["jockey"]
 
 DEFAULT_WEIGHT = 55.0
-DEFAULT_ODDS = 10.0
+DEFAULT_JOCKEY = "unknown"
 
 
 def build_features(entries: pd.DataFrame) -> pd.DataFrame:
-    """出走馬データから予測モデル用の特徴量データフレームを作成する。
+    """Build odds-independent model features for one race.
 
-    ``entries`` は1レース分の出走馬データで、少なくとも
-    ``horse_number`` / ``weight`` / ``odds`` 列を持つこと。
-    戻り値は入力と同じindexを保持する(呼び出し側でentry_idと対応付けるため)。
-
-    学習(train.py)と推論(predictor/main.py)の両方から、レース単位の
-    DataFrameに対して呼び出されることを想定している。
+    Expected columns are horse_number, weight, and jockey. The returned frame keeps
+    the same index as the input so scores can be mapped back to entry IDs.
     """
     weight = entries["weight"].astype(float)
     mean_weight = weight.mean()
@@ -22,19 +19,13 @@ def build_features(entries: pd.DataFrame) -> pd.DataFrame:
         mean_weight = DEFAULT_WEIGHT
     weight_filled = weight.fillna(mean_weight)
 
-    odds = entries["odds"].astype(float)
-    mean_odds = odds.mean()
-    if pd.isna(mean_odds):
-        mean_odds = DEFAULT_ODDS
-    odds_filled = odds.fillna(mean_odds)
-    safe_odds = odds_filled.where(odds_filled > 0, mean_odds)
+    jockey = entries.get("jockey", pd.Series(DEFAULT_JOCKEY, index=entries.index))
+    jockey_filled = jockey.fillna(DEFAULT_JOCKEY).replace("", DEFAULT_JOCKEY).astype(str)
 
     df = pd.DataFrame(index=entries.index)
     df["horse_number"] = entries["horse_number"].astype(float)
     df["weight"] = weight_filled
-    df["odds"] = odds_filled
-    df["implied_prob"] = 1.0 / safe_odds
-    df["odds_rank"] = odds_filled.rank(method="min")
     df["field_size"] = float(len(entries))
+    df["jockey"] = jockey_filled.astype("category")
 
     return df[FEATURE_COLUMNS]

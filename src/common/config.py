@@ -23,7 +23,13 @@ class Settings:
 
     # 賭け判断を行うのは発走何分前から先か。レースは数日前から収集されるが、
     # オッズが古い時点で予測・賭けをしないよう、発走が近いレースに限定する
-    BET_WINDOW_MINUTES: int = int(os.environ.get("BET_WINDOW_MINUTES", "60"))
+    BET_DECISION_WINDOW_MINUTES: int = int(
+        os.environ.get(
+            "BET_DECISION_WINDOW_MINUTES",
+            os.environ.get("BET_WINDOW_MINUTES", "60"),
+        )
+    )
+    BET_WINDOW_MINUTES: int = BET_DECISION_WINDOW_MINUTES
 
     # 賭け戦略
     BET_AMOUNT: float = float(os.environ.get("BET_AMOUNT", "100"))

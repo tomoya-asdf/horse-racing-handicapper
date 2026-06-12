@@ -35,6 +35,7 @@ export interface SettingsView {
   readonly: {
     collect_interval_minutes: number;
     predict_interval_minutes: number;
+    bet_decision_window_minutes: number;
     scraper_request_interval_seconds: number;
     ipat_dry_run: boolean;
     ipat_credentials_configured: boolean;

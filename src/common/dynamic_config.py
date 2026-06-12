@@ -107,7 +107,7 @@ def get_settings_view(include_env: bool = True) -> dict:
         {"key": "COLLECT_INTERVAL_MINUTES", "label": "データ収集間隔(分)", "value": settings.COLLECT_INTERVAL_MINUTES},
         {"key": "PREDICT_INTERVAL_MINUTES", "label": "予測・決済間隔(分)", "value": settings.PREDICT_INTERVAL_MINUTES},
         {"key": "COLLECT_DAYS_AHEAD", "label": "先何日分まで収集", "value": settings.COLLECT_DAYS_AHEAD},
-        {"key": "BET_WINDOW_MINUTES", "label": "賭け判定の発走分前", "value": settings.BET_WINDOW_MINUTES},
+        {"key": "BET_DECISION_WINDOW_MINUTES", "label": "賭け対象決定の発走分前", "value": settings.BET_DECISION_WINDOW_MINUTES},
         {"key": "BET_AMOUNT", "label": "1件あたり賭け金(円)", "value": settings.BET_AMOUNT},
         {"key": "BET_SCORE_THRESHOLD", "label": "賭けるAIスコア下限", "value": settings.BET_SCORE_THRESHOLD},
         {"key": "BET_MIN_EXPECTED_VALUE", "label": "賭ける期待値下限", "value": settings.BET_MIN_EXPECTED_VALUE},
@@ -129,6 +129,7 @@ def get_settings_view(include_env: bool = True) -> dict:
         "readonly": {
             "collect_interval_minutes": settings.COLLECT_INTERVAL_MINUTES,
             "predict_interval_minutes": settings.PREDICT_INTERVAL_MINUTES,
+            "bet_decision_window_minutes": settings.BET_DECISION_WINDOW_MINUTES,
             "scraper_request_interval_seconds": settings.SCRAPER_REQUEST_INTERVAL_SECONDS,
             "ipat_dry_run": settings.IPAT_DRY_RUN,
             "ipat_credentials_configured": bool(
