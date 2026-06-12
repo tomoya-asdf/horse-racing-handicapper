@@ -105,7 +105,7 @@ def get_settings_view(include_env: bool = True) -> dict:
         {"key": "DATABASE_URL", "label": "DB接続URL", "value": "設定済み" if settings.DATABASE_URL else "未設定", "secret": True},
         {"key": "BETTING_MODE", "label": "賭けモード", "value": settings.BETTING_MODE},
         {"key": "COLLECT_INTERVAL_MINUTES", "label": "データ収集間隔(分)", "value": settings.COLLECT_INTERVAL_MINUTES},
-        {"key": "PREDICT_INTERVAL_MINUTES", "label": "予測・決済間隔(分)", "value": settings.PREDICT_INTERVAL_MINUTES},
+        {"key": "PREDICT_INTERVAL_MINUTES", "label": "predictor定期実行間隔(分)", "value": settings.PREDICT_INTERVAL_MINUTES},
         {"key": "COLLECT_DAYS_AHEAD", "label": "先何日分まで収集", "value": settings.COLLECT_DAYS_AHEAD},
         {"key": "BET_DECISION_WINDOW_MINUTES", "label": "賭け対象決定の発走分前", "value": settings.BET_DECISION_WINDOW_MINUTES},
         {"key": "BET_AMOUNT", "label": "1件あたり賭け金(円)", "value": settings.BET_AMOUNT},
