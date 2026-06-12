@@ -79,7 +79,23 @@ export interface RaceEntry {
   odds: number | null;
   finish_position: number | null;
   score: number | null;
+  ai_rank: number | null;
+  odds_rank: number | null;
+  expected_value: number | null;
+  value_label: string | null;
+  ai_vs_odds: string | null;
   has_bet: boolean;
+}
+
+export interface RaceAiPick {
+  entry_id: number;
+  horse_number: number;
+  horse_name: string;
+  score: number;
+  ai_rank: number | null;
+  odds: number | null;
+  odds_rank: number | null;
+  expected_value: number | null;
 }
 
 export interface RaceDetail {
@@ -91,6 +107,11 @@ export interface RaceDetail {
   race_name: string | null;
   start_time: string | null;
   model_version: string | null;
+  analysis: {
+    top_ai: RaceAiPick[];
+    score_gap: number | null;
+    race_shape: string | null;
+  };
   entries: RaceEntry[];
   bets: RaceBet[];
 }

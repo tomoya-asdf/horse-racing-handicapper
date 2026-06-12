@@ -97,6 +97,21 @@ def _model_info() -> dict:
     return info
 
 
+def _rank_entries(values: dict[int, float], reverse: bool = False) -> dict[int, int]:
+    ranked: dict[int, int] = {}
+    previous_value = None
+    previous_rank = 0
+    for index, (entry_id, value) in enumerate(
+        sorted(values.items(), key=lambda item: item[1], reverse=reverse),
+        start=1,
+    ):
+        if previous_value is None or value != previous_value:
+            previous_rank = index
+            previous_value = value
+        ranked[entry_id] = previous_rank
+    return ranked
+
+
 @app.get("/api/overview")
 def overview() -> dict:
     session = get_session()
@@ -233,6 +248,42 @@ def race_detail(race_id: int) -> dict:
                 if p.model_version == model_version
             }
         bet_entry_ids = {b.entry_id for b in race.bets}
+        ai_rank_map = _rank_entries(score_map, reverse=True)
+        odds_rank_map = _rank_entries(
+            {e.id: e.odds for e in race.entries if e.odds is not None and e.odds > 0}
+        )
+
+        ranked_entries = sorted(
+            [e for e in race.entries if e.id in score_map],
+            key=lambda e: score_map[e.id],
+            reverse=True,
+        )
+        score_gap = None
+        race_shape = None
+        if len(ranked_entries) >= 2:
+            score_gap = score_map[ranked_entries[0].id] - score_map[ranked_entries[1].id]
+            if score_gap >= 0.05:
+                race_shape = "本命寄り"
+            elif score_gap <= 0.02:
+                race_shape = "混戦"
+            else:
+                race_shape = "やや混戦"
+
+        top_ai = [
+            {
+                "entry_id": e.id,
+                "horse_number": e.horse_number,
+                "horse_name": e.horse_name,
+                "score": score_map[e.id],
+                "ai_rank": ai_rank_map.get(e.id),
+                "odds": e.odds,
+                "odds_rank": odds_rank_map.get(e.id),
+                "expected_value": (
+                    score_map[e.id] * e.odds if e.odds is not None and e.odds > 0 else None
+                ),
+            }
+            for e in ranked_entries[:3]
+        ]
 
         entries = [
             {
@@ -244,6 +295,27 @@ def race_detail(race_id: int) -> dict:
                 "odds": e.odds,
                 "finish_position": e.finish_position,
                 "score": score_map.get(e.id),
+                "ai_rank": ai_rank_map.get(e.id),
+                "odds_rank": odds_rank_map.get(e.id),
+                "expected_value": (
+                    score_map[e.id] * e.odds
+                    if e.id in score_map and e.odds is not None and e.odds > 0
+                    else None
+                ),
+                "value_label": (
+                    "妙味あり"
+                    if e.id in score_map and e.odds is not None and e.odds > 0 and score_map[e.id] * e.odds >= 1.0
+                    else "見送り"
+                    if e.id in score_map and e.odds is not None and e.odds > 0
+                    else None
+                ),
+                "ai_vs_odds": (
+                    "AI評価高め"
+                    if e.id in ai_rank_map
+                    and e.id in odds_rank_map
+                    and ai_rank_map[e.id] < odds_rank_map[e.id]
+                    else None
+                ),
                 "has_bet": e.id in bet_entry_ids,
             }
             for e in sorted(race.entries, key=lambda e: e.horse_number)
@@ -272,6 +344,11 @@ def race_detail(race_id: int) -> dict:
             "race_name": race.race_name,
             "start_time": _iso(race.start_time),
             "model_version": model_version,
+            "analysis": {
+                "top_ai": top_ai,
+                "score_gap": score_gap,
+                "race_shape": race_shape,
+            },
             "entries": entries,
             "bets": bets,
         }

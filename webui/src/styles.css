@@ -374,6 +374,11 @@ h2 {
 /* レース詳細 */
 .race-detail {
   padding: 8px 4px 14px;
+  overflow-x: auto;
+}
+
+.race-detail .table {
+  min-width: 1080px;
 }
 
 .race-bets {
@@ -387,6 +392,76 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.race-ai-summary {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0 12px;
+}
+
+.race-ai-status,
+.race-ai-pick {
+  background: rgba(79, 156, 249, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.race-ai-status {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 140px;
+}
+
+.race-ai-status strong {
+  color: var(--accent);
+}
+
+.race-ai-picks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.race-ai-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.race-ai-pick span:nth-child(2) {
+  color: var(--text);
+  font-weight: bold;
+}
+
+.race-ai-rank,
+.value-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.race-ai-rank {
+  background: rgba(79, 156, 249, 0.16);
+  color: var(--accent);
+}
+
+.value-good {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--green);
+}
+
+.value-muted {
+  background: rgba(139, 152, 169, 0.15);
+  color: var(--text-muted);
 }
 
 .pagination-bar {
