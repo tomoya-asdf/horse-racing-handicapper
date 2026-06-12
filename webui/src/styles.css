@@ -51,8 +51,18 @@ body {
   font-weight: normal;
 }
 
-.tabs {
+.header-nav {
   display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tabs,
+.auth-actions {
+  display: flex;
+  align-items: flex-end;
   gap: 4px;
 }
 
@@ -74,6 +84,36 @@ body {
   color: var(--accent);
   border-bottom-color: var(--accent);
   font-weight: bold;
+}
+
+.auth-button {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  padding: 7px 16px;
+}
+
+.auth-button-login {
+  background: var(--accent);
+  border-color: rgba(79, 156, 249, 0.6);
+}
+
+.auth-button-login:hover,
+.auth-button-login.active {
+  filter: brightness(1.12);
+}
+
+.auth-button-logout {
+  background: var(--red);
+  border-color: rgba(248, 81, 73, 0.6);
+}
+
+.auth-button-logout:hover {
+  filter: brightness(1.08);
 }
 
 .content {
@@ -276,6 +316,50 @@ h2 {
 
 .danger-text {
   color: var(--red);
+}
+
+.login-page {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px;
+}
+
+.login-panel h2 {
+  margin-top: 0;
+}
+
+.login-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.login-panel label span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.login-panel input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+.login-panel input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* ジョブ実行ボタン */
@@ -627,6 +711,11 @@ button.primary {
   font-size: 14px;
   font-weight: bold;
   cursor: pointer;
+}
+
+button.primary.compact {
+  padding: 7px 14px;
+  font-size: 13px;
 }
 
 button.primary:hover {

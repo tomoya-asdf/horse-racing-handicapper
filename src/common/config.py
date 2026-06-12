@@ -40,6 +40,8 @@ class Settings:
     IPAT_PIN: str = os.environ.get("IPAT_PIN", "")
     IPAT_PARS_NUMBER: str = os.environ.get("IPAT_PARS_NUMBER", "")
     IPAT_DRY_RUN: bool = os.environ.get("IPAT_DRY_RUN", "true").lower() in ("1", "true", "yes")
+    ADMIN_LOGIN_ID: str = os.environ.get("ADMIN_LOGIN_ID", "")
+    ADMIN_PASSWORD: str = os.environ.get("ADMIN_PASSWORD", "")
 
 
 settings = Settings()

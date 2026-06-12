@@ -7,16 +7,18 @@
 """
 
 import logging
+import secrets
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 
 from src.common import jobs
+from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import get_settings_view, save_settings
 from src.common.models import Bet, BetStatus, BettingMode, Entry, JobRun, Prediction, Race
@@ -38,6 +40,9 @@ JOB_LABELS = {
 
 # 一度にバックフィルできる最大日数(netkeibaへの負荷を抑えるため)
 BACKFILL_MAX_DAYS = 31
+ADMIN_COOKIE_NAME = "admin_session"
+ADMIN_SESSION_SECONDS = 60 * 60 * 12
+ADMIN_SESSIONS: set[str] = set()
 
 
 @app.on_event("startup")
@@ -112,6 +117,59 @@ def _rank_entries(values: dict[int, float], reverse: bool = False) -> dict[int, 
     return ranked
 
 
+def _admin_configured() -> bool:
+    return bool(settings.ADMIN_LOGIN_ID and settings.ADMIN_PASSWORD)
+
+
+def _is_admin_request(request: Request) -> bool:
+    token = request.cookies.get(ADMIN_COOKIE_NAME)
+    return bool(token and token in ADMIN_SESSIONS)
+
+
+def require_admin(request: Request) -> None:
+    if not _admin_configured():
+        raise HTTPException(status_code=503, detail="管理者ログインが設定されていません")
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=401, detail="管理者ログインが必要です")
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict:
+    return {"configured": _admin_configured(), "authenticated": _is_admin_request(request)}
+
+
+@app.post("/api/auth/login")
+def auth_login(values: dict, response: Response) -> dict:
+    if not _admin_configured():
+        raise HTTPException(status_code=503, detail="ADMIN_LOGIN_ID / ADMIN_PASSWORD を.envに設定してください")
+    login_id = str(values.get("login_id", ""))
+    password = str(values.get("password", ""))
+    if not (
+        secrets.compare_digest(login_id, settings.ADMIN_LOGIN_ID)
+        and secrets.compare_digest(password, settings.ADMIN_PASSWORD)
+    ):
+        raise HTTPException(status_code=401, detail="ログインIDまたはパスワードが違います")
+    token = secrets.token_urlsafe(32)
+    ADMIN_SESSIONS.add(token)
+    response.set_cookie(
+        ADMIN_COOKIE_NAME,
+        token,
+        max_age=ADMIN_SESSION_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+    return {"authenticated": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response) -> dict:
+    token = request.cookies.get(ADMIN_COOKIE_NAME)
+    if token:
+        ADMIN_SESSIONS.discard(token)
+    response.delete_cookie(ADMIN_COOKIE_NAME)
+    return {"authenticated": False}
+
+
 @app.get("/api/overview")
 def overview() -> dict:
     session = get_session()
@@ -159,7 +217,7 @@ def overview() -> dict:
         },
         "modes": modes,
         "latest_jobs": latest_jobs,
-        "settings": get_settings_view(),
+        "settings": get_settings_view(include_env=False),
     }
 
 
@@ -474,7 +532,7 @@ def list_bets(mode: str = BettingMode.SIM.value) -> dict:
         session.close()
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(require_admin)])
 def list_jobs(limit: int = 50) -> dict:
     session = get_session()
     try:
@@ -512,7 +570,7 @@ def _validate_backfill_params(body: dict) -> dict:
     return {"start_date": start.isoformat(), "end_date": end.isoformat()}
 
 
-@app.post("/api/jobs/{job_name}/run")
+@app.post("/api/jobs/{job_name}/run", dependencies=[Depends(require_admin)])
 def trigger_job(job_name: str, body: dict | None = None) -> dict:
     if job_name not in jobs.ALL_JOBS:
         raise HTTPException(status_code=400, detail=f"未対応のジョブです: {job_name}")
@@ -523,12 +581,12 @@ def trigger_job(job_name: str, body: dict | None = None) -> dict:
     return {**result, "job_name": job_name, "label": JOB_LABELS[job_name]}
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", dependencies=[Depends(require_admin)])
 def read_settings() -> dict:
     return get_settings_view()
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", dependencies=[Depends(require_admin)])
 def update_settings(values: dict) -> dict:
     try:
         return save_settings(values)

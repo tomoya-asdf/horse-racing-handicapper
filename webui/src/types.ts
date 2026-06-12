@@ -20,6 +20,11 @@ export interface JobRun {
   finished_at: string | null;
 }
 
+export interface AuthStatus {
+  configured: boolean;
+  authenticated: boolean;
+}
+
 export interface SettingsView {
   editable: {
     betting_mode: string;

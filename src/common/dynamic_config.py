@@ -95,7 +95,7 @@ def load_betting_config() -> BettingConfig:
     )
 
 
-def get_settings_view() -> dict:
+def get_settings_view(include_env: bool = True) -> dict:
     """WebUIの設定画面に表示する内容(変更可能な設定 + 表示のみの.env設定)。"""
     config = load_betting_config()
     env_settings = [
@@ -116,6 +116,8 @@ def get_settings_view() -> dict:
         {"key": "IPAT_PIN", "label": "IPAT暗証番号", "value": "設定済み" if settings.IPAT_PIN else "未設定", "secret": True},
         {"key": "IPAT_PARS_NUMBER", "label": "IPAT P-ARS番号", "value": "設定済み" if settings.IPAT_PARS_NUMBER else "未設定", "secret": True},
         {"key": "IPAT_DRY_RUN", "label": "IPATドライラン", "value": settings.IPAT_DRY_RUN},
+        {"key": "ADMIN_LOGIN_ID", "label": "管理者ログインID", "value": "設定済み" if settings.ADMIN_LOGIN_ID else "未設定", "secret": True},
+        {"key": "ADMIN_PASSWORD", "label": "管理者パスワード", "value": "設定済み" if settings.ADMIN_PASSWORD else "未設定", "secret": True},
     ]
     return {
         "editable": {
@@ -135,7 +137,7 @@ def get_settings_view() -> dict:
                 and settings.IPAT_PARS_NUMBER
             ),
         },
-        "env_settings": env_settings,
+        "env_settings": env_settings if include_env else [],
     }
 
 
