@@ -38,6 +38,12 @@ export default function JobsPage() {
     }
   };
 
+  const confirmAndRunJob = (name: string, label: string, body?: unknown) => {
+    const ok = window.confirm(`${label}を実行しますか？\n必要な場合だけ実行してください。`);
+    if (!ok) return;
+    void runJob(name, label, body);
+  };
+
   return (
     <div>
       <h2>手動実行</h2>
@@ -46,7 +52,11 @@ export default function JobsPage() {
       </p>
       <div className="job-buttons">
         {JOB_BUTTONS.map((job) => (
-          <button key={job.name} className="job-button" onClick={() => runJob(job.name, job.label)}>
+          <button
+            key={job.name}
+            className="job-button"
+            onClick={() => confirmAndRunJob(job.name, job.label)}
+          >
             <span className="job-button-label">{job.label}</span>
             <span className="job-button-desc">{job.description}</span>
           </button>
@@ -74,7 +84,7 @@ export default function JobsPage() {
         <button
           className="primary"
           onClick={() =>
-            runJob("backfill", "過去データ取得", {
+            confirmAndRunJob("backfill", "過去データ取得", {
               start_date: backfillStart,
               end_date: backfillEnd,
             })

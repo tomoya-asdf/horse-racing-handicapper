@@ -3,6 +3,8 @@ import { getJSON, formatDateTime } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
 import type { RaceDetail, RaceSummary } from "../types";
 
+const PAGE_SIZE = 50;
+
 function ScoreBar({ score }: { score: number | null }) {
   if (score === null) return <span className="muted">-</span>;
   return (
@@ -77,18 +79,46 @@ function RaceDetailView({ raceId }: { raceId: number }) {
 }
 
 export default function RacesPage() {
-  const { data, error } = usePolling<{ races: RaceSummary[] }>(
-    () => getJSON("/api/races?limit=50"),
-    30000
-  );
+  const [page, setPage] = useState(0);
+  const offset = page * PAGE_SIZE;
+  const { data, error } = usePolling<{
+    races: RaceSummary[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>(() => getJSON(`/api/races?limit=${PAGE_SIZE}&offset=${offset}`), 30000, [offset]);
   const [openId, setOpenId] = useState<number | null>(null);
+  const total = data?.total ?? 0;
+  const rowCount = data?.races.length ?? 0;
+  const start = !data || total === 0 ? 0 : data.offset + 1;
+  const end = data ? Math.min(data.offset + rowCount, total) : 0;
+  const canGoPrev = page > 0;
+  const canGoNext = data ? data.offset + rowCount < total : false;
+  const changePage = (nextPage: number) => {
+    setOpenId(null);
+    setPage(nextPage);
+  };
 
   if (error) return <ErrorNote message={error} />;
   if (!data) return <div className="loading">読み込み中...</div>;
 
   return (
     <div>
-      <h2>レース一覧(直近50件)</h2>
+      <div className="pagination-bar">
+        <span className="muted">
+          {total.toLocaleString()}件中 {start.toLocaleString()}-{end.toLocaleString()}件を表示
+        </span>
+        <div className="pagination-actions">
+          <button disabled={!canGoPrev} onClick={() => changePage(page - 1)}>
+            前のページ
+          </button>
+          <span>{page + 1}ページ目</span>
+          <button disabled={!canGoNext} onClick={() => changePage(page + 1)}>
+            次のページ
+          </button>
+        </div>
+      </div>
+      <h2>レース一覧(50件ずつ表示)</h2>
       <table className="table">
         <thead>
           <tr>

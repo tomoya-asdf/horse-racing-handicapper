@@ -149,9 +149,12 @@ def overview() -> dict:
 
 
 @app.get("/api/races")
-def list_races(limit: int = 30) -> dict:
+def list_races(limit: int = 30, offset: int = 0) -> dict:
+    page_limit = min(max(limit, 1), 200)
+    page_offset = max(offset, 0)
     session = get_session()
     try:
+        total = session.query(func.count(Race.id)).scalar() or 0
         races = (
             session.query(Race)
             .options(
@@ -160,7 +163,8 @@ def list_races(limit: int = 30) -> dict:
                 selectinload(Race.bets),
             )
             .order_by(Race.race_date.desc(), Race.start_time.desc())
-            .limit(min(limit, 200))
+            .offset(page_offset)
+            .limit(page_limit)
             .all()
         )
 
@@ -198,7 +202,7 @@ def list_races(limit: int = 30) -> dict:
             )
     finally:
         session.close()
-    return {"races": items}
+    return {"races": items, "total": total, "limit": page_limit, "offset": page_offset}
 
 
 @app.get("/api/races/{race_id}")
