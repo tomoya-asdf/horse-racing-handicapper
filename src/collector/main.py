@@ -7,7 +7,7 @@ from src.collector import scraper
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
-from src.common.models import Entry, Race
+from src.common.models import Entry, Horse, HorseResult, Race
 from src.common.timeutils import now_jst
 
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +34,12 @@ def _upsert_races(races: list[dict]) -> None:
             race.race_number = race_data["race_number"]
             race.race_name = race_data["race_name"]
             race.start_time = race_data["start_time"]
+            # レース条件は取得できた項目だけ更新する(馬場・天候は当日に判明し、
+            # 数日先の収集ではNoneのため、既存値を消さない)
+            for field in ("distance", "track_type", "direction", "going", "weather", "race_class"):
+                value = race_data.get(field)
+                if value is not None:
+                    setattr(race, field, value)
             session.flush()  # 新規レースのIDを確定させる
 
             for entry_data in race_data["entries"]:
@@ -47,9 +53,16 @@ def _upsert_races(races: list[dict]) -> None:
                     session.add(entry)
 
                 entry.horse_name = entry_data["horse_name"]
+                entry.horse_id = entry_data.get("horse_id")
                 entry.jockey = entry_data["jockey"]
+                entry.jockey_id = entry_data.get("jockey_id")
                 entry.weight = entry_data["weight"]
-                entry.odds = entry_data["odds"]
+                # オッズ・人気は収集の度に更新するが、取得できなかった(None)場合に
+                # 既存の値を消さないよう、値があるときだけ上書きする
+                if entry_data.get("odds") is not None:
+                    entry.odds = entry_data["odds"]
+                if entry_data.get("popularity") is not None:
+                    entry.popularity = entry_data["popularity"]
 
         session.commit()
     finally:
@@ -99,6 +112,107 @@ def _update_finished_results() -> int:
     return updated
 
 
+def _upsert_horse_results(
+    session, horse_id: str, name: str | None, results: list[dict], sire: dict | None = None
+) -> None:
+    """1頭分の過去成績をhorse_resultsへ反映し、馬マスタ(名前・父・取得時刻)を更新する。
+
+    後から走が増えるため、再取得時は既存行を全件入れ替えて重複なく保つ。
+    取得を試みた事実をhorsesに記録し、新馬(0件)を毎回取りに行かないようにする。
+    ``sire`` を渡すと父(sire_id/sire_name)も同じhorse行に保存する。
+    """
+    session.query(HorseResult).filter(HorseResult.horse_id == horse_id).delete()
+    # (horse_id, race_key) は一意。同一fetch内で同じrace_keyが重複した場合に備えて
+    # 非nullのrace_keyの重複を除く(race_key=Noneの行は複数あってよい)
+    seen_keys: set[str] = set()
+    for row in results:
+        key = row.get("race_key")
+        if key is not None:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+        session.add(HorseResult(horse_id=horse_id, **row))
+
+    horse = session.get(Horse, horse_id)
+    if horse is None:
+        horse = Horse(horse_id=horse_id)
+        session.add(horse)
+    if name:
+        horse.name = name
+    if sire and sire.get("sire_id"):
+        horse.sire_id = sire["sire_id"]
+        horse.sire_name = sire["sire_name"]
+    horse.results_fetched_at = now_jst()
+
+
+def _horse_ids_to_fetch(session, limit: int) -> list[str]:
+    """過去成績が未取得、または取得が古い馬のIDを差分的に返す。"""
+    stale_before = now_jst() - timedelta(days=settings.HORSE_RESULTS_REFRESH_DAYS)
+    rows = (
+        session.query(Entry.horse_id)
+        .outerjoin(Horse, Horse.horse_id == Entry.horse_id)
+        .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+        .filter((Horse.horse_id.is_(None)) | (Horse.results_fetched_at < stale_before))
+        .distinct()
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def _update_horse_results(limit: int) -> int:
+    """出走馬のうち過去成績が未取得・古い馬を最大limit頭まで収集する。
+
+    netkeibaへの負荷を抑えるため頭数を制限し、馬ごとに短いトランザクションで
+    コミットする(途中失敗で前の馬の成果を失わないため)。
+    """
+    if limit <= 0:
+        return 0
+    session = get_session()
+    try:
+        horse_ids = _horse_ids_to_fetch(session, limit)
+        # 父(sire)は1頭1回取れば十分なので、既に取得済みの馬はスキップする
+        sire_known = (
+            {
+                row[0]
+                for row in session.query(Horse.horse_id)
+                .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
+                .all()
+            }
+            if horse_ids
+            else set()
+        )
+    finally:
+        session.close()
+
+    fetched = 0
+    for horse_id in horse_ids:
+        try:
+            data = scraper.fetch_horse_results(horse_id)
+        except Exception as exc:
+            logger.warning("failed to fetch horse results horse_id=%s: %s", horse_id, exc)
+            continue
+
+        ped = None
+        if horse_id not in sire_known:
+            try:
+                ped = scraper.fetch_horse_pedigree(horse_id)
+            except Exception as exc:
+                logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
+
+        session = get_session()
+        try:
+            _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
+            session.commit()
+            fetched += 1
+        except Exception:
+            session.rollback()
+            logger.exception("failed to upsert horse results horse_id=%s", horse_id)
+        finally:
+            session.close()
+    return fetched
+
+
 def _run_collect(params: dict) -> str:
     # JRAは主に土日開催のため、当日だけでなく数日先まで収集する
     # (開催の無い日はレース一覧が空で返るだけなので、リクエスト数は1日1回分増えるのみ)
@@ -109,11 +223,27 @@ def _run_collect(params: dict) -> str:
         _upsert_races(races)
         total += len(races)
     updated = _update_finished_results()
+    horses = _update_horse_results(settings.HORSE_RESULTS_PER_RUN)
     return (
         f"取得レース={total}件"
         f"({today}〜{today + timedelta(days=settings.COLLECT_DAYS_AHEAD)}), "
-        f"結果反映={updated}件"
+        f"結果反映={updated}件, 馬成績収集={horses}頭"
     )
+
+
+def _run_collect_horses(params: dict) -> str:
+    """馬の過去成績だけをまとめて収集する手動ジョブ。
+
+    定期収集(collect)でも少しずつ収集するが、初回の埋め込みを早めたいときに
+    手動で繰り返し実行する用。1回の上限はparamsのlimit、無ければ既定の5倍。
+    """
+    default_limit = settings.HORSE_RESULTS_PER_RUN * 5
+    try:
+        limit = int(params.get("limit", default_limit)) if params else default_limit
+    except (TypeError, ValueError):
+        limit = default_limit
+    fetched = _update_horse_results(limit)
+    return f"馬の過去成績を{fetched}頭分収集しました(上限{limit}頭)"
 
 
 def _run_backfill(params: dict) -> str:
@@ -132,12 +262,18 @@ def _scheduled_collect() -> None:
 
 
 def _poll_queued_jobs() -> None:
-    jobs.process_queued({jobs.COLLECT: _run_collect, jobs.BACKFILL: _run_backfill})
+    jobs.process_queued(
+        {
+            jobs.COLLECT: _run_collect,
+            jobs.BACKFILL: _run_backfill,
+            jobs.COLLECT_HORSES: _run_collect_horses,
+        }
+    )
 
 
 def main() -> None:
     init_db()
-    jobs.recover_stale([jobs.COLLECT, jobs.BACKFILL])
+    jobs.recover_stale([jobs.COLLECT, jobs.BACKFILL, jobs.COLLECT_HORSES])
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(
         _scheduled_collect, "interval", minutes=settings.COLLECT_INTERVAL_MINUTES

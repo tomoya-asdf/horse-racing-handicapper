@@ -12,19 +12,25 @@ from datetime import date, datetime
 
 import joblib
 import pandas as pd
-from lightgbm import LGBMClassifier
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import train_test_split
+from lightgbm import LGBMClassifier, early_stopping, log_evaluation
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import log_loss, roc_auc_score
 
 from src.common.db import get_session, init_db
 from src.common.models import Entry, Race
 from src.predictor.features import CATEGORICAL_FEATURES, FEATURE_COLUMNS, build_features
+from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
 from src.predictor.model import MODEL_PATH
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MIN_RACES = 20
+# 時系列分割で検証に回す割合(新しい側) と early stopping の打ち切りラウンド数
+VALID_FRACTION = 0.2
+EARLY_STOPPING_ROUNDS = 50
+MAX_BOOST_ROUNDS = 1000
+DEFAULT_BOOST_ROUNDS = 100
 
 
 def _prepare_training_data(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -49,7 +55,13 @@ def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame
         )
         if before is not None:
             query = query.filter(Race.race_date < before)
-        races = query.distinct().all()
+        # 時系列分割のため古い順に並べる(frames の並び順がそのまま時系列になる)
+        races = query.distinct().order_by(Race.race_date, Race.id).all()
+
+        # 全馬の過去成績を一括ロードし、各レースの開催日より前の成績だけで
+        # 履歴特徴量を作る(history側で日付フィルタしリークを防ぐ)
+        history = load_horse_history(session)
+        sire_map = load_sire_map(session)
 
         frames: list[pd.DataFrame] = []
         for race in races:
@@ -57,21 +69,113 @@ def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame
             if len(entries) < 2:
                 continue
 
-            entries_df = pd.DataFrame(
-                {
-                    "horse_number": [e.horse_number for e in entries],
-                    "weight": [e.weight for e in entries],
-                    "jockey": [e.jockey for e in entries],
-                },
-                index=[e.id for e in entries],
-            )
+            entries_df = build_entries_frame(entries, race, history, sire_map)
             features = build_features(entries_df)
-            features["label"] = [int(e.finish_position == 1) for e in entries]
+            features["label"] = pd.Series(
+                {e.id: int(e.finish_position == 1) for e in entries}
+            )
             frames.append(features)
 
         return frames, len(frames)
     finally:
         session.close()
+
+
+def _evaluate_with_time_split(
+    frames: list[pd.DataFrame],
+) -> tuple[float | None, float | None, int | None, IsotonicRegression | None, int]:
+    """時系列分割(古い側で学習・新しい側で検証)で評価する。
+
+    戻り値は (検証AUC, 検証logloss, 最適な木の本数, 確率較正器, 検証レース数)。
+    検証に使えるデータが無い/片側クラスのみの場合は AUC等を None で返す。
+    """
+    split = int(len(frames) * (1 - VALID_FRACTION))
+    train_frames = frames[:split]
+    valid_frames = frames[split:]
+    if not train_frames or not valid_frames:
+        return None, None, None, None, 0
+
+    train_data = _prepare_training_data(train_frames)
+    valid_data = _prepare_training_data(valid_frames)
+    if train_data["label"].nunique() < 2 or valid_data["label"].nunique() < 2:
+        return None, None, None, None, len(valid_frames)
+
+    eval_model = LGBMClassifier(
+        objective="binary", n_estimators=MAX_BOOST_ROUNDS, random_state=42
+    )
+    eval_model.fit(
+        train_data[FEATURE_COLUMNS],
+        train_data["label"],
+        categorical_feature=CATEGORICAL_FEATURES,
+        eval_set=[(valid_data[FEATURE_COLUMNS], valid_data["label"])],
+        eval_metric="binary_logloss",
+        callbacks=[early_stopping(EARLY_STOPPING_ROUNDS, verbose=False), log_evaluation(0)],
+    )
+
+    valid_raw = eval_model.predict_proba(valid_data[FEATURE_COLUMNS])[:, 1]
+    auc = float(roc_auc_score(valid_data["label"], valid_raw))
+    logloss = float(log_loss(valid_data["label"], valid_raw, labels=[0, 1]))
+    best_iteration = eval_model.best_iteration_
+
+    # 確率較正(等張回帰): 検証フォールドの「予測確率→実際の1着率」を学習し、
+    # 期待値計算(スコア×オッズ)に使える素直な確率へ補正する。単調変換なので
+    # AI順位(レース内の並び)は変えず、確率の絶対値だけを較正する。
+    calibrator = IsotonicRegression(out_of_bounds="clip")
+    calibrator.fit(valid_raw, valid_data["label"].to_numpy())
+
+    logger.info(
+        "time-split eval: AUC=%.4f logloss=%.4f best_iter=%s (valid races=%d)",
+        auc,
+        logloss,
+        best_iteration,
+        len(valid_frames),
+    )
+    return auc, logloss, best_iteration, calibrator, len(valid_frames)
+
+
+def build_model_bundle(frames: list[pd.DataFrame]) -> tuple[dict | None, dict]:
+    """frames から学習済みモデル一式(bundle)をメモリ上で組み立てて返す(保存はしない)。
+
+    学習・確率較正の手順を train_model とバックテストで共有するための関数。
+    戻り値は (bundle または None, 指標dict)。1着が1件も無い等で学習不能なら bundle=None。
+    """
+    data = _prepare_training_data(frames)
+    metrics: dict = {
+        "rows": len(data),
+        "auc": None,
+        "logloss": None,
+        "n_estimators": None,
+        "valid_races": 0,
+        "calibrated": False,
+    }
+    if data["label"].nunique() < 2:
+        return None, metrics
+
+    auc, logloss, best_iteration, calibrator, valid_races = _evaluate_with_time_split(frames)
+
+    # 最終モデルは全データで学習する。木の本数は時系列検証で得た最適値を使い、
+    # 過学習を抑える(検証できなかった場合は既定値)。
+    n_estimators = best_iteration if best_iteration else DEFAULT_BOOST_ROUNDS
+    model = LGBMClassifier(objective="binary", n_estimators=n_estimators, random_state=42)
+    model.fit(data[FEATURE_COLUMNS], data["label"], categorical_feature=CATEGORICAL_FEATURES)
+
+    bundle = {
+        "model": model,
+        "feature_columns": FEATURE_COLUMNS,
+        "categorical_features": CATEGORICAL_FEATURES,
+        "calibrator": calibrator,
+        "version": datetime.now().strftime("%Y%m%d-%H%M%S"),
+    }
+    metrics.update(
+        {
+            "auc": auc,
+            "logloss": logloss,
+            "n_estimators": n_estimators,
+            "valid_races": valid_races,
+            "calibrated": calibrator is not None,
+        }
+    )
+    return bundle, metrics
 
 
 def train_model() -> str:
@@ -81,48 +185,23 @@ def train_model() -> str:
     if race_count < MIN_RACES:
         return f"学習データ不足(レース数={race_count}, 必要数={MIN_RACES})のためスキップしました"
 
-    data = _prepare_training_data(frames)
-
-    if data["label"].nunique() < 2:
+    bundle, metrics = build_model_bundle(frames)
+    if bundle is None:
         return "学習データに1着の記録が無いためスキップしました"
 
-    # 検証はレース単位で分割する。同一レースの行を学習と検証の両方に入れると、
-    # レース内の相対特徴(odds_rank等)を通じて検証AUCが楽観的になるため
-    train_frames, valid_frames = train_test_split(frames, test_size=0.2, random_state=42)
-    train_data = _prepare_training_data(train_frames)
-    valid_data = _prepare_training_data(valid_frames)
-
-    auc = None
-    if train_data["label"].nunique() > 1 and valid_data["label"].nunique() > 1:
-        eval_model = LGBMClassifier(objective="binary", random_state=42)
-        eval_model.fit(
-            train_data[FEATURE_COLUMNS],
-            train_data["label"],
-            categorical_feature=CATEGORICAL_FEATURES,
-        )
-        auc = roc_auc_score(
-            valid_data["label"], eval_model.predict_proba(valid_data[FEATURE_COLUMNS])[:, 1]
-        )
-        logger.info("validation AUC: %.4f (valid races=%d)", auc, len(valid_frames))
-
-    # 保存するモデルは全データで学習する(分割は検証AUCの算出のためだけに使う)
-    model = LGBMClassifier(objective="binary", random_state=42)
-    model.fit(data[FEATURE_COLUMNS], data["label"], categorical_feature=CATEGORICAL_FEATURES)
-
-    version = datetime.now().strftime("%Y%m%d-%H%M%S")
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
-        {
-            "model": model,
-            "feature_columns": FEATURE_COLUMNS,
-            "categorical_features": CATEGORICAL_FEATURES,
-            "version": version,
-        },
-        MODEL_PATH,
+    joblib.dump(bundle, MODEL_PATH)
+
+    summary = (
+        f"モデルを保存しました(version={bundle['version']}, レース={race_count}件, "
+        f"行数={metrics['rows']}, 木の本数={metrics['n_estimators']}"
     )
-    summary = f"モデルを保存しました(version={version}, レース={race_count}件, 行数={len(data)}"
-    if auc is not None:
-        summary += f", 検証AUC={auc:.4f}"
+    if metrics["auc"] is not None:
+        summary += (
+            f", 検証AUC={metrics['auc']:.4f}, 検証logloss={metrics['logloss']:.4f}, "
+            f"検証レース={metrics['valid_races']}件"
+        )
+        summary += ", 確率較正=有効" if metrics["calibrated"] else ""
     return summary + ")"
 
 

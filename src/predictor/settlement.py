@@ -8,8 +8,46 @@ from src.common.models import Bet, BetStatus
 
 logger = logging.getLogger(__name__)
 
-# Bet.bet_type -> fetch_race_results()が返すpayoutsの式別キー
-PAYOUT_KEYS = {"単勝": "win"}
+# 1頭券種: Bet.bet_type -> payouts のキー(payoutは馬番で突き合わせる)
+SINGLE_PAYOUT_KEYS = {"単勝": "win"}
+# 買い目券種: Bet.bet_type -> payouts のキー(payoutは combination で突き合わせる)
+COMBINATION_PAYOUT_KEYS = {"馬連": "quinella"}
+
+
+def _bet_horse_numbers(bet: Bet) -> list[int]:
+    """賭けの対象馬番(単勝は1頭、馬連は2頭)を返す。"""
+    if bet.combination:
+        return [int(n) for n in bet.combination.split("-")]
+    if bet.entry is not None:
+        return [bet.entry.horse_number]
+    return []
+
+
+def _settle_with_payouts(bet: Bet, result: dict) -> None:
+    """払戻情報から payout を確定する(取消返還は呼び出し側で先に処理済み)。"""
+    payouts = result["payouts"]
+    if bet.bet_type in COMBINATION_PAYOUT_KEYS:
+        key = COMBINATION_PAYOUT_KEYS[bet.bet_type]
+        amount = next(
+            (p["amount"] for p in payouts.get(key, []) if p.get("combination") == bet.combination),
+            0,
+        )
+    elif bet.bet_type in SINGLE_PAYOUT_KEYS:
+        key = SINGLE_PAYOUT_KEYS[bet.bet_type]
+        horse_number = bet.entry.horse_number if bet.entry else None
+        amount = next(
+            (p["amount"] for p in payouts.get(key, []) if p.get("horse_number") == horse_number),
+            0,
+        )
+    else:
+        logger.warning(
+            "未対応の式別のため0円で確定します: bet_id=%s bet_type=%s", bet.id, bet.bet_type
+        )
+        amount = 0
+
+    # payouts の金額は100円あたりの払戻金
+    bet.payout = bet.amount / 100 * amount
+    bet.is_settled = True
 
 
 def settle_pending_races() -> int:
@@ -32,25 +70,28 @@ def settle_pending_races() -> int:
         results_cache: dict[str, dict | None] = {}
 
         for bet in pending_bets:
-            entry = bet.entry
-            if entry is None:
+            race = bet.race
+            if race is None:
                 continue
 
-            if entry.finish_position is None:
-                race_has_results = any(
-                    e.finish_position is not None for e in bet.race.entries
-                )
-                if race_has_results:
-                    # レース結果は確定しているのに着順が無い → 出走取消・競走除外
-                    # とみなし、IPATの返還と同様に賭け金をそのまま戻す。
-                    # (競走中止も着順なしのため返還扱いになるが、稀なため許容する)
-                    bet.payout = bet.amount
-                    bet.is_settled = True
-                    settled_count += 1
-                    logger.info("出走取消/除外として返還扱いにします: bet_id=%s", bet.id)
-                continue  # レース結果未確定
+            horses = _bet_horse_numbers(bet)
+            if not horses:
+                continue  # 対象馬が特定できない(壊れた賭け)
 
-            race_key = bet.race.race_key
+            if not any(e.finish_position is not None for e in race.entries):
+                continue  # レース結果未確定 → 次回再試行
+
+            # 対象馬のいずれかが出走取消・競走除外・中止(着順なし)なら、
+            # IPATの返還と同様に賭け金をそのまま戻す
+            positions = {e.horse_number: e.finish_position for e in race.entries}
+            if any(positions.get(h) is None for h in horses):
+                bet.payout = bet.amount
+                bet.is_settled = True
+                settled_count += 1
+                logger.info("出走取消/除外として返還扱いにします: bet_id=%s", bet.id)
+                continue
+
+            race_key = race.race_key
             if race_key not in results_cache:
                 try:
                     results_cache[race_key] = fetch_race_results(race_key)
@@ -62,27 +103,7 @@ def settle_pending_races() -> int:
             if result is None or not result.get("payouts"):
                 continue  # 払戻情報を取得できなかった場合は次回再試行
 
-            payout_key = PAYOUT_KEYS.get(bet.bet_type)
-            if payout_key is None:
-                logger.warning(
-                    "未対応の式別のため0円で確定します: bet_id=%s bet_type=%s", bet.id, bet.bet_type
-                )
-                bet.payout = 0.0
-                bet.is_settled = True
-                settled_count += 1
-                continue
-
-            payout_amount = next(
-                (
-                    p["amount"]
-                    for p in result["payouts"].get(payout_key, [])
-                    if p["horse_number"] == entry.horse_number
-                ),
-                0,
-            )
-            # payouts の金額は100円あたりの払戻金
-            bet.payout = bet.amount / 100 * payout_amount
-            bet.is_settled = True
+            _settle_with_payouts(bet, result)
             settled_count += 1
 
         session.commit()

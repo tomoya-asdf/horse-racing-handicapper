@@ -27,11 +27,13 @@ Handler = Callable[[dict], "str | None"]
 # ジョブ名と担当サービス
 COLLECT = "collect"  # collector
 BACKFILL = "backfill"  # collector
+COLLECT_HORSES = "collect_horses"  # collector(馬の過去成績収集)
 PREDICT = "predict"  # predictor
 BET_DECIDE = "bet_decide"  # predictor
 SETTLE = "settle"  # predictor
 TRAIN = "train"  # predictor
-ALL_JOBS = (COLLECT, BACKFILL, PREDICT, BET_DECIDE, SETTLE, TRAIN)
+BACKTEST = "backtest"  # predictor(回収率バックテスト)
+ALL_JOBS = (COLLECT, BACKFILL, COLLECT_HORSES, PREDICT, BET_DECIDE, SETTLE, TRAIN, BACKTEST)
 
 POLL_INTERVAL_SECONDS = 5
 

@@ -35,6 +35,12 @@ class Settings:
         os.environ.get("SCRAPER_REQUEST_INTERVAL_SECONDS", "1")
     )
 
+    # 馬の過去成績(horse_results)収集。netkeibaへの負荷を抑えるため1回の収集で
+    # 取りに行く馬数を制限し、定期収集の度に少しずつ埋める。REFRESH_DAYS日より
+    # 古い取得済みの馬は最新走を取り込むため再取得する。
+    HORSE_RESULTS_PER_RUN: int = int(os.environ.get("HORSE_RESULTS_PER_RUN", "30"))
+    HORSE_RESULTS_REFRESH_DAYS: int = int(os.environ.get("HORSE_RESULTS_REFRESH_DAYS", "30"))
+
     # IPAT (JRA即時購入) 自動操作
     IPAT_SUBSCRIBER_NUMBER: str = os.environ.get("IPAT_SUBSCRIBER_NUMBER", "")
     IPAT_PIN: str = os.environ.get("IPAT_PIN", "")

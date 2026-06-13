@@ -49,6 +49,14 @@ class Race(Base):
     race_number = Column(Integer, nullable=False)
     race_name = Column(String)
     start_time = Column(DateTime)
+    # レース条件(出馬表ヘッダから取得)。距離・コースは事前に判明するが、
+    # 馬場状態・天候は当日にならないと出ないため収集の度に更新する。
+    distance = Column(Integer)  # 距離(m)
+    track_type = Column(String)  # 芝 / ダート / 障害
+    direction = Column(String)  # 右 / 左 / 直
+    going = Column(String)  # 馬場状態(良/稍重/重/不良)
+    weather = Column(String)  # 天候(晴/曇/雨 等)
+    race_class = Column(String)  # クラス・格(G1/G2/G3/オープン/3勝クラス/未勝利/新馬 等)
     created_at = Column(DateTime, default=now_jst)
 
     entries = relationship("Entry", back_populates="race", cascade="all, delete-orphan")
@@ -63,13 +71,70 @@ class Entry(Base):
     id = Column(Integer, primary_key=True)
     race_id = Column(Integer, ForeignKey("races.id"), nullable=False)
     horse_number = Column(Integer, nullable=False)
+    horse_id = Column(String, index=True)  # netkeibaの馬ID(過去成績 horse_results との紐付けに使う)
     horse_name = Column(String, nullable=False)
     jockey = Column(String)
+    jockey_id = Column(String)  # netkeibaの騎手ID(騎手名は同姓同名がありうるため学習にはIDを使う)
     weight = Column(Float)
-    odds = Column(Float)
+    odds = Column(Float)  # 発走前は予想オッズ、発走後は最終オッズ(収集の度に上書き)
+    popularity = Column(Integer)  # 人気順位(発走前は予想人気)。netkeibaから取得、無ければオッズ昇順で導出
     finish_position = Column(Integer)
 
     race = relationship("Race", back_populates="entries")
+
+
+class Horse(Base):
+    """馬マスタ。過去成績(horse_results)の取得済み管理に使う。
+
+    ``results_fetched_at`` を見て、未取得・古い馬だけを差分的に再取得する
+    (新馬など過去走が0件の馬を毎回取りに行かないようにするため、取得を試みたら
+    結果が0件でもこの行を作る)。
+    """
+
+    __tablename__ = "horses"
+
+    horse_id = Column(String, primary_key=True)
+    name = Column(String)
+    sire_id = Column(String)  # 父のnetkeiba馬ID(血統特徴量に使う。距離・芝ダ適性の遺伝)
+    sire_name = Column(String)  # 父名(表示用)
+    results_fetched_at = Column(DateTime)
+
+
+class HorseResult(Base):
+    """馬ごとの過去レース成績(netkeibaの馬ページの成績表1行=1レコード)。
+
+    特徴量作成(直近n走の集計など)の元データ。horse_id + race_key で一意。
+    """
+
+    __tablename__ = "horse_results"
+    __table_args__ = (
+        UniqueConstraint("horse_id", "race_key", name="uq_horse_results_horse_race"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    horse_id = Column(String, index=True, nullable=False)
+    race_key = Column(String)  # 過去レースのnetkeiba race_id(取得できた場合)
+    race_date = Column(Date)
+    venue = Column(String)  # 開催(例: "2中山5")。場名そのものではなく開催表記
+    race_name = Column(String)
+    field_size = Column(Integer)  # 頭数
+    post_position = Column(Integer)  # 枠番
+    horse_number = Column(Integer)  # 馬番
+    odds = Column(Float)  # 単勝オッズ
+    popularity = Column(Integer)  # 人気
+    finish_position = Column(Integer)  # 着順(中止・除外等は取得できずNone)
+    jockey = Column(String)
+    jockey_id = Column(String)
+    weight = Column(Float)  # 斤量
+    distance = Column(Integer)  # 距離(m)
+    track_type = Column(String)  # 芝 / ダート / 障害
+    going = Column(String)  # 馬場状態(良/稍重/重/不良)
+    time_seconds = Column(Float)  # 走破タイムを秒に換算
+    margin = Column(String)  # 着差(クビ・1.1/2 等の表記をそのまま保持)
+    passing = Column(String)  # 通過順(例: "3-3-2-1")
+    last_3f = Column(Float)  # 上がり3F
+    horse_weight = Column(Integer)  # 馬体重
+    created_at = Column(DateTime, default=now_jst)
 
 
 class Prediction(Base):
@@ -139,6 +204,8 @@ class Bet(Base):
     mode = Column(String(10), nullable=False)
     status = Column(String(10), nullable=False, default=BetStatus.PLACED.value)
     bet_type = Column(String, nullable=False)
+    # 馬連など複数頭の券種の買い目(例 "4-9"、馬番昇順)。単勝はNullでentryが対象馬
+    combination = Column(String)
     amount = Column(Float, nullable=False)
     odds_at_bet = Column(Float)
     payout = Column(Float)

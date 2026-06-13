@@ -112,6 +112,8 @@ def get_settings_view(include_env: bool = True) -> dict:
         {"key": "BET_SCORE_THRESHOLD", "label": "賭けるAIスコア下限", "value": settings.BET_SCORE_THRESHOLD},
         {"key": "BET_MIN_EXPECTED_VALUE", "label": "賭ける期待値下限", "value": settings.BET_MIN_EXPECTED_VALUE},
         {"key": "SCRAPER_REQUEST_INTERVAL_SECONDS", "label": "スクレイピング間隔(秒)", "value": settings.SCRAPER_REQUEST_INTERVAL_SECONDS},
+        {"key": "HORSE_RESULTS_PER_RUN", "label": "1回の収集で取得する馬数(過去成績)", "value": settings.HORSE_RESULTS_PER_RUN},
+        {"key": "HORSE_RESULTS_REFRESH_DAYS", "label": "馬過去成績の再取得間隔(日)", "value": settings.HORSE_RESULTS_REFRESH_DAYS},
         {"key": "IPAT_SUBSCRIBER_NUMBER", "label": "IPAT加入者番号", "value": "設定済み" if settings.IPAT_SUBSCRIBER_NUMBER else "未設定", "secret": True},
         {"key": "IPAT_PIN", "label": "IPAT暗証番号", "value": "設定済み" if settings.IPAT_PIN else "未設定", "secret": True},
         {"key": "IPAT_PARS_NUMBER", "label": "IPAT P-ARS番号", "value": "設定済み" if settings.IPAT_PARS_NUMBER else "未設定", "secret": True},

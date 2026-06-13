@@ -12,7 +12,7 @@
 
 import logging
 
-from src.collector.scraper import parse_race_key
+from src.collector.scraper import normalize_combination, parse_race_key
 from src.common.config import settings
 from src.common.dynamic_config import BettingConfig
 from src.common.models import Bet, Prediction, Race
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 IPAT_TOP_URL = "https://www.ipat.jra.go.jp/"
 
+# IPAT自動購入(本番)が対応する券別。馬連はsim/バックテストのみで、本番自動購入は未対応
 SUPPORTED_BET_TYPES = {"単勝"}
 
 # 要実機検証: 各画面の入力欄・ボタンのセレクタ。
@@ -49,47 +50,106 @@ SELECTORS = {
 }
 
 
-def decide_bets(race: Race, predictions: list[Prediction], config: BettingConfig) -> list[Bet]:
-    """予測スコアから賭け対象・賭け式・金額を決定し、Bet エンティティのリストを返す。
+def decide_bets(
+    race: Race,
+    predictions: list[Prediction],
+    config: BettingConfig,
+    quinella_odds: dict[str, float] | None = None,
+) -> list[Bet]:
+    """予測スコアから賭け対象・券別・金額を決定し、Bet エンティティのリストを返す。
 
-    戦略: 予測スコア(1着になる確率)が最も高い馬について、
+    単勝と馬連を併用する。共通の考え方は「スコアだけで買うと1番人気ばかりになり
+    長期回収率が控除率(約80%)に収束するため、期待値(確率×オッズ)を併用する」こと。
 
-    - スコアが ``config.score_threshold`` 以上
-    - 期待値(スコア × 単勝オッズ)が ``config.min_expected_value`` 以上
+    - 単勝: 最有力馬のスコアが ``score_threshold`` 以上、かつ 期待値(スコア×単勝オッズ)が
+      ``min_expected_value`` 以上なら単勝を買う。
+    - 馬連: ``quinella_odds`` が渡され、AI上位2頭のペアの期待値(ペア的中確率×馬連オッズ)が
+      ``min_expected_value`` 以上なら馬連を買う(最有力馬のスコアが ``score_threshold`` 未満の
+      弱い予想のレースでは見送る)。
 
-    の両方を満たす場合に単勝で ``config.amount`` 円を賭ける。
-    スコアだけで賭けるとほぼ常に1番人気を買うことになり、長期回収率は
-    控除率相当(約80%)に収束しやすいため、期待値の条件を併用する。
-    オッズが取得できていない馬には賭けない(期待値を判断できないため)。
-    設定値はWebUIから変更できる(``src/common/dynamic_config.py``)。
+    オッズが無い対象には賭けない。設定値はWebUIから変更できる。
     """
+    bets: list[Bet] = []
+    win_bet = _decide_win(race, predictions, config)
+    if win_bet is not None:
+        bets.append(win_bet)
+    if quinella_odds:
+        quinella_bet = _decide_quinella(race, predictions, config, quinella_odds)
+        if quinella_bet is not None:
+            bets.append(quinella_bet)
+    return bets
+
+
+def _decide_win(race: Race, predictions: list[Prediction], config: BettingConfig) -> Bet | None:
     if not predictions:
-        return []
+        return None
 
     best = max(predictions, key=lambda p: p.score)
     if best.score < config.score_threshold:
-        return []
+        return None
 
     entry = next((e for e in race.entries if e.id == best.entry_id), None)
     if entry is None or entry.odds is None or entry.odds <= 0:
-        logger.info("オッズ未取得のため賭けを見送ります: race_id=%s", race.id)
-        return []
+        logger.info("オッズ未取得のため単勝を見送ります: race_id=%s", race.id)
+        return None
 
-    expected_value = best.score * entry.odds
-    if expected_value < config.min_expected_value:
-        return []
+    if best.score * entry.odds < config.min_expected_value:
+        return None
 
-    return [
-        Bet(
-            race_id=race.id,
-            entry_id=best.entry_id,
-            mode=config.mode,
-            bet_type="単勝",
-            amount=config.amount,
-            odds_at_bet=entry.odds,
-            is_settled=False,
-        )
-    ]
+    return Bet(
+        race_id=race.id,
+        entry_id=best.entry_id,
+        mode=config.mode,
+        bet_type="単勝",
+        amount=config.amount,
+        odds_at_bet=entry.odds,
+        is_settled=False,
+    )
+
+
+def _decide_quinella(
+    race: Race,
+    predictions: list[Prediction],
+    config: BettingConfig,
+    quinella_odds: dict[str, float],
+) -> Bet | None:
+    if len(predictions) < 2:
+        return None
+
+    top2 = sorted(predictions, key=lambda p: p.score, reverse=True)[:2]
+    p1, p2 = top2[0].score, top2[1].score
+    # 弱い予想(最有力でも閾値未満)のレースは見送る。確率は0<p<1のみ扱う
+    if p1 < config.score_threshold or not (0 < p2 <= p1 < 1):
+        return None
+
+    entry_map = {e.id: e for e in race.entries}
+    e1 = entry_map.get(top2[0].entry_id)
+    e2 = entry_map.get(top2[1].entry_id)
+    if e1 is None or e2 is None:
+        return None
+
+    # Harville近似: 2頭が1-2着(順不同)になる確率
+    # P = p1*p2/(1-p1) + p2*p1/(1-p2) = p1*p2*(1/(1-p1)+1/(1-p2))
+    pair_prob = p1 * p2 * (1.0 / (1.0 - p1) + 1.0 / (1.0 - p2))
+
+    combination = normalize_combination([e1.horse_number, e2.horse_number])
+    odds = quinella_odds.get(combination)
+    if odds is None or odds <= 0:
+        return None
+
+    if pair_prob * odds < config.min_expected_value:
+        return None
+
+    return Bet(
+        race_id=race.id,
+        entry_id=top2[0].entry_id,
+        mode=config.mode,
+        bet_type="馬連",
+        combination=combination,
+        amount=config.amount,
+        odds_at_bet=odds,
+        is_settled=False,
+    )
 
 
 def place_bet_production(bet: Bet) -> None:

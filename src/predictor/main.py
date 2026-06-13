@@ -1,17 +1,18 @@
 import logging
 from datetime import timedelta
 
-import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from src.collector import scraper
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import BettingConfig, load_betting_config
 from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race
 from src.common.timeutils import now_jst
-from src.predictor import betting, model, settlement, train
+from src.predictor import backtest, betting, model, settlement, train
 from src.predictor.features import build_features
+from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -30,16 +31,11 @@ def _has_complete_odds(race: Race) -> bool:
     return bool(race.entries) and all(entry.odds is not None and entry.odds > 0 for entry in race.entries)
 
 
-def _predict_race(race: Race, model_bundle: dict, session) -> list[Prediction]:
+def _predict_race(
+    race: Race, model_bundle: dict, session, history: dict, sire_map: dict
+) -> list[Prediction]:
     entries = race.entries
-    entries_df = pd.DataFrame(
-        {
-            "horse_number": [entry.horse_number for entry in entries],
-            "weight": [entry.weight for entry in entries],
-            "jockey": [entry.jockey for entry in entries],
-        },
-        index=[entry.id for entry in entries],
-    )
+    entries_df = build_entries_frame(entries, race, history, sire_map)
     scores = model.predict(model_bundle, build_features(entries_df))
 
     predictions = []
@@ -116,6 +112,8 @@ def _run_predict(params: dict) -> str:
             )
             .all()
         )
+        history = load_horse_history(session)
+        sire_map = load_sire_map(session)
         for race in races:
             if not _is_unfinished_race(race):
                 continue
@@ -129,7 +127,7 @@ def _run_predict(params: dict) -> str:
                 if existing is not None:
                     skipped_existing += 1
                     continue
-                _predict_race(race, model_bundle, session)
+                _predict_race(race, model_bundle, session, history, sire_map)
                 session.commit()
                 predicted_races += 1
             except Exception:
@@ -195,7 +193,8 @@ def _run_bet_decide(params: dict) -> str:
                     skipped_already_bet += 1
                     continue
 
-                bets = betting.decide_bets(race, predictions, config)
+                quinella_odds = scraper.fetch_quinella_odds(race.race_key)
+                bets = betting.decide_bets(race, predictions, config, quinella_odds)
                 if bets:
                     new_bets += _place_bets(session, bets, config)
             except Exception:
@@ -228,6 +227,15 @@ def _run_train(params: dict) -> str:
     return train.train_model()
 
 
+def _run_backtest(params: dict) -> str:
+    """回収率バックテスト。paramsの日付範囲はAPI側で検証済み。"""
+    from datetime import date
+
+    start = date.fromisoformat(params["start_date"])
+    end = date.fromisoformat(params["end_date"])
+    return backtest.format_summary(backtest.run_backtest(start, end))
+
+
 def _scheduled_predict() -> None:
     jobs.run_scheduled(jobs.PREDICT, _run_predict)
 
@@ -247,13 +255,14 @@ def _poll_queued_jobs() -> None:
             jobs.BET_DECIDE: _run_bet_decide,
             jobs.SETTLE: _run_settle,
             jobs.TRAIN: _run_train,
+            jobs.BACKTEST: _run_backtest,
         }
     )
 
 
 def main() -> None:
     init_db()
-    jobs.recover_stale([jobs.PREDICT, jobs.BET_DECIDE, jobs.SETTLE, jobs.TRAIN])
+    jobs.recover_stale([jobs.PREDICT, jobs.BET_DECIDE, jobs.SETTLE, jobs.TRAIN, jobs.BACKTEST])
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(_scheduled_predict, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
     scheduler.add_job(_scheduled_bet_decide, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
