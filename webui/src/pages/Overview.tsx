@@ -93,6 +93,10 @@ export default function OverviewPage() {
               <span>{data.data.finished_race_count} レース</span>
             </div>
             <div>
+              <span>戦績取得済み馬</span>
+              <span>{data.data.horse_result_horse_count.toLocaleString()} 頭</span>
+            </div>
+            <div>
               <span>発走前レース</span>
               <span>{data.data.upcoming_race_count} 件</span>
             </div>

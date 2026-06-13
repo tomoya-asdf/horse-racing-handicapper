@@ -46,6 +46,9 @@ class Settings:
     # 古い取得済みの馬は最新走を取り込むため再取得する。
     HORSE_RESULTS_PER_RUN: int = int(os.environ.get("HORSE_RESULTS_PER_RUN", "30"))
     HORSE_RESULTS_REFRESH_DAYS: int = int(os.environ.get("HORSE_RESULTS_REFRESH_DAYS", "30"))
+    BACKFILL_HORSE_RESULTS_LIMIT: int = int(
+        os.environ.get("BACKFILL_HORSE_RESULTS_LIMIT", "300")
+    )
 
     # IPAT (JRA即時購入) 自動操作
     IPAT_SUBSCRIBER_NUMBER: str = os.environ.get("IPAT_SUBSCRIBER_NUMBER", "")

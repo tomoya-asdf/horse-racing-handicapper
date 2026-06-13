@@ -238,12 +238,12 @@ def _update_horse_results(limit: int) -> int:
     return _fetch_and_store_horse_results(horse_ids, sire_known)
 
 
-def update_horse_results_for_race_dates(start: date, end: date) -> int:
+def update_horse_results_for_race_dates(start: date, end: date, limit: int | None = None) -> int:
     """Backfill後のモデル学習用に、期間内に出走した馬の過去戦績と血統を補完する。"""
     stale_before = now_jst() - timedelta(days=settings.HORSE_RESULTS_REFRESH_DAYS)
     session = get_session()
     try:
-        rows = (
+        query = (
             session.query(Entry.horse_id)
             .join(Race, Race.id == Entry.race_id)
             .outerjoin(Horse, Horse.horse_id == Entry.horse_id)
@@ -255,8 +255,12 @@ def update_horse_results_for_race_dates(start: date, end: date) -> int:
                 | (Horse.results_fetched_at < stale_before)
             )
             .distinct()
-            .all()
         )
+        if limit is not None:
+            if limit <= 0:
+                return 0
+            query = query.limit(limit)
+        rows = query.all()
         horse_ids = [row[0] for row in rows]
         sire_known = _known_sire_ids(session, horse_ids)
     finally:

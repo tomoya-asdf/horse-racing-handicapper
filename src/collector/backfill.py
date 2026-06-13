@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 
 from src.collector import scraper
 from src.collector.main import _upsert_races, update_horse_results_for_race_dates
+from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.models import Race
 from src.common.timeutils import now_jst
@@ -54,18 +55,21 @@ def _apply_results(start: date, end: date) -> int:
 
 def backfill(start: date, end: date) -> str:
     total = 0
+    updated = 0
     for offset in range((end - start).days + 1):
         target = start + timedelta(days=offset)
         races = scraper.fetch_upcoming_races(target, include_started=True)
         _upsert_races(races)
         total += len(races)
-        logger.info("%s: %d races collected", target, len(races))
+        daily_updated = _apply_results(target, target)
+        updated += daily_updated
+        logger.info("%s: %d races collected, %d results applied", target, len(races), daily_updated)
 
-    updated = _apply_results(start, end)
-    horses = update_horse_results_for_race_dates(start, end)
+    horse_limit = settings.BACKFILL_HORSE_RESULTS_LIMIT
+    horses = update_horse_results_for_race_dates(start, end, limit=horse_limit)
     return (
         f"取得レース={total}件({start}〜{end}), "
-        f"結果反映={updated}件, 馬過去戦績/血統取得={horses}頭"
+        f"結果反映={updated}件, 馬過去戦績/血統取得={horses}頭(上限{horse_limit}頭)"
     )
 
 

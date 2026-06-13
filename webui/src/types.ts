@@ -94,6 +94,7 @@ export interface Overview {
   data: {
     race_count: number;
     finished_race_count: number;
+    horse_result_horse_count: number;
     upcoming_race_count: number;
     last_collected_at: string | null;
   };

@@ -200,6 +200,9 @@ def overview() -> dict:
             .scalar()
             or 0
         )
+        horse_result_horse_count = (
+            session.query(func.count(func.distinct(HorseResult.horse_id))).scalar() or 0
+        )
         last_collected_at = session.query(func.max(Race.created_at)).scalar()
         upcoming_race_count = (
             session.query(func.count(Race.id))
@@ -231,6 +234,7 @@ def overview() -> dict:
         "data": {
             "race_count": race_count,
             "finished_race_count": finished_race_count,
+            "horse_result_horse_count": horse_result_horse_count,
             "upcoming_race_count": upcoming_race_count,
             "last_collected_at": _iso(last_collected_at),
         },
