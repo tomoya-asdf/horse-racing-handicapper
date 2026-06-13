@@ -1,214 +1,188 @@
 # horse-racing-handicapper
 
-競馬のレースデータを定期的に収集し、AI予想と賭け対象決定を行う個人用システムです。
-「本番」と「シミュレーション」の2モードで賭けを記録し、回収率などの実績や
-ジョブの実行・設定変更をWeb管理コンソールから行えます。
+JRA レースデータを収集し、AI 予測、買い目判定、結果確認を Web UI から行うローカル運用向けアプリケーションです。
 
-## アーキテクチャ
-
-`docker compose` で以下の4サービスを起動します。
+## 構成
 
 | サービス | 役割 |
 | --- | --- |
-| `db` | PostgreSQL。レース・出走馬・予測・賭け履歴・ジョブ履歴・設定を保存 |
-| `collector` | レース情報・オッズ・結果を定期取得しDBへ保存 |
-| `predictor` | AI予想、賭け対象決定、モデル学習、決済を担当。賭けは本番/シミュレーション別にDBへ記録 |
-| `webui` | 管理コンソール（React + FastAPI）。状況確認・履歴・ジョブ手動実行・設定変更 |
+| `db` | PostgreSQL。レース、出走馬、過去戦績、予測、買い目、ジョブ履歴、設定を保存します。 |
+| `collector` | netkeiba からレース、出馬表、単勝オッズ、人気、結果、払戻、馬の過去戦績、血統を収集します。 |
+| `predictor` | モデル学習、予測、買い目判定、投票、払戻反映、バックテストを実行します。 |
+| `webui` | 管理画面と API を提供します。 |
 
-詳細は [docs/architecture.md](docs/architecture.md) を参照してください。
+主なディレクトリ:
 
-## ディレクトリ構成
-
-    .
-    ├── docker/
-    │   ├── Dockerfile             # collector 用
-    │   ├── Dockerfile.predictor   # predictor用 (Playwright同梱)
-    │   ├── Dockerfile.webui       # webui用 (Reactビルド + FastAPI)
-    │   ├── requirements.txt
-    │   ├── requirements-api.txt
-    │   └── requirements-predictor.txt
-    ├── src/
-    │   ├── common/      # DBモデル・設定・ジョブ管理など共通コード
-    │   ├── collector/   # データ収集サービス (netkeiba.com)
-    │   ├── predictor/   # AI予想・賭け対象決定サービス + 学習スクリプト
-    │   └── api/         # 管理コンソールのバックエンドAPI (FastAPI)
-    ├── webui/           # 管理コンソールのフロントエンド (React + TypeScript + Vite)
-    ├── docs/
-    │   └── architecture.md
-    ├── data/            # モデルファイル(model.pkl)などの永続化用ボリューム
-    ├── docker-compose.yml
-    └── .env.example
-
-## セットアップ
-
-1. `.env.example` を `.env` にコピーし、必要に応じて値を変更する
-
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-
-2. コンテナをビルド・起動する
-
-   ```powershell
-   docker compose up -d --build
-   ```
-
-3. 管理コンソールへアクセスする
-
-   http://localhost:8000
-
-   ※ 管理コンソール(8000)とPostgreSQL(5432)はループバックアドレス(127.0.0.1)のみに
-   公開しています。他の端末からアクセスする必要がある場合のみ `docker-compose.yml` の
-   `ports` を変更してください（認証は無いため、公開範囲の変更は慎重に）。
-
-## 管理コンソール (webui)
-
-http://localhost:8000 で以下の操作ができます。
-
-- **概要**: モデルの学習状態、収集データ件数、モード別の回収率、各ジョブの最終実行
-- **レース**: 収集済みレースの一覧と、出走馬・予測スコア・賭けの詳細
-- **賭け履歴**: モード別の賭け一覧・回収率・累積投資/回収のグラフ
-- **ジョブ**: データ収集・AI予想・賭け対象決定・決済・モデル学習の手動実行と実行履歴
-  （手動・スケジュールを問わず全実行が記録されます）
-- **設定**: 賭けモード・金額・スコア閾値・期待値下限の変更（再起動不要で次回ジョブから反映）
-
-ジョブの手動実行は、APIが `job_runs` テーブルへ実行依頼を登録し、担当サービス
-（collector / predictor）が数秒間隔のポーリングで取得して実行する仕組みです。
-そのためwebuiが起動していなくても定期実行には影響しません。
-
-## 設定の2層構造
-
-- **.env**: DB接続・ジョブ間隔・IPAT認証情報などの静的設定。変更にはコンテナの再起動が必要
-- **管理コンソールの「設定」(DBの `app_settings`)**: 賭けモード・賭け金額・スコア閾値・
-  期待値下限。各ジョブが実行のたびに読み直すため再起動不要。未設定の項目は .env の値を使う
-
-## 本番 / シミュレーションモードの切り替え
-
-管理コンソールの「設定」、または `.env` の `BETTING_MODE` で切り替えます
-（管理コンソールでの設定が優先されます）。
-
-- `sim`: シミュレーション。賭けは `bets` テーブルに記録されるのみで、実際の購入は行わない
-- `prod`: 本番。予測結果に基づき実際の購入操作（`src/predictor/betting.py` の `place_bet_production`）を呼び出す
-
-`bets.mode` カラムで `prod` / `sim` を区別して保存するため、それぞれの回収率を
-個別に確認できます。
-
-## 賭け戦略
-
-管理コンソールの「設定」から変更できます（詳細は `src/predictor/betting.py`）。
-
-- スコア閾値（`bet_score_threshold`）: 賭けを行う予測スコア（1着になる確率）の下限
-- 期待値下限（`bet_min_expected_value`）: 賭けを行う期待値（予測スコア×単勝オッズ）の下限。
-  既定の `1.0` は「モデル上プラス期待値の時のみ賭ける」ことを意味します。
-  スコアだけで賭けるとほぼ常に1番人気を買うことになり、長期回収率は控除率相当
-  （約80%）に収束しやすいため、この条件を併用しています
-- 賭け金額（`bet_amount`）: 1件あたりの賭け金額（100円以上・100円単位）
-
-AI予想は未確定レースすべてを対象にし、オッズは使いません。
-賭け対象決定は、発走まで `BET_DECISION_WINDOW_MINUTES`（既定60分）以内かつ
-オッズ入力済みのレースに限定されます。賭け対象決定に使うオッズは collector が最後に
-取得した時点のもの（最大 `COLLECT_INTERVAL_MINUTES` 分前）であり、購入時点の実オッズとは
-ずれがある点に注意してください。
-
-## 過去データの一括取得（バックフィル）
-
-通常の収集ジョブは「これから発走するレース」を対象とするため、学習データ
-（結果が確定したレース）が貯まるまで時間がかかります。**初回セットアップ時は、
-管理コンソールの「ジョブ」画面にある「過去データ取得（バックフィル）」で
-期間を指定して実行してください**（既定で直近2週間が入力されています）。
-過去の開催日のレース・出走馬・最終オッズ・確定結果をさかのぼって取得します。
-
-- 一度に指定できるのは31日分まで（netkeibaへの負荷を抑えるため。それ以上は分割実行）
-- 開催の無い日（平日など）は空振りするだけなので、週をまたいで指定して問題ありません
-- 1レースあたり約3リクエスト（間隔1秒）のため、1開催日あたり2〜3分かかります
-
-コマンドラインからも実行できます。
-
-```powershell
-docker compose run --rm collector python -m src.collector.backfill 20260530 20260607
+```text
+src/common/      DB モデル、設定、ジョブ管理
+src/collector/   スクレイピング、収集、過去データ補完
+src/predictor/   特徴量生成、学習、予測、買い目判定、バックテスト
+src/api/         FastAPI と Web UI 用 API
+webui/           React フロントエンド
+docker/          各サービスの Dockerfile
+docs/            設計ドキュメント
 ```
 
-## モデルの学習
-
-`predictor` は `data/model.pkl` が存在しない場合、「モデル未学習」のログを出して
-待機します（コンテナはクラッシュしません）。`collector` がレース結果をある程度
-蓄積したら（またはバックフィル後に）、管理コンソールの「ジョブ」から
-**モデル学習** を実行してください。コマンドラインからも実行できます。
+## 起動
 
 ```powershell
-docker compose run --rm predictor python -m src.predictor.train
+docker compose up -d --build
 ```
 
-学習データ（`entries.finish_position` が確定したレース）が20件未満の場合は
-スキップされ、モデルファイルは作成されません。学習が完了すると
-`data/model.pkl` に保存され、`predictor` の次回ジョブから自動的にそのモデルで
-予測されます。
+Web UI:
 
-## データの永続化
+```text
+http://localhost:8000
+```
 
-収集したデータ・モデル・賭け履歴は、コンテナを停止・削除しても残ります。
+主な手動ジョブは Web UI のジョブ画面から実行できます。CLI で直接実行する場合は次のようにします。
 
-- **PostgreSQLのデータ**（レース・賭け履歴・設定など）: 名前付きボリューム `db_data` に保存。
-  `docker compose stop` / `docker compose down` / PCの再起動では消えません
-- **モデルファイル**（`model.pkl`）: ホストの `./data` フォルダに保存
+```powershell
+docker compose run --rm collector python -m src.collector.main collect
+docker compose run --rm collector python -m src.collector.main collect_horses
+docker compose run --rm predictor python -m src.predictor.main train
+docker compose run --rm predictor python -m src.predictor.main predict
+docker compose run --rm predictor python -m src.predictor.main bet_decide
+docker compose run --rm predictor python -m src.predictor.main settle
+```
 
-データが消えるのは `docker compose down -v`（ボリュームも削除）を明示的に実行した場合と、
-`./data` を手動で削除した場合だけです。バックアップを取りたい場合は
-`docker compose exec db pg_dump -U horse horse_racing > backup.sql` を利用してください。
+過去データの補完:
 
-## 注意事項
+```powershell
+docker compose run --rm collector python -m src.collector.main backfill --start 2025-01-01 --end 2025-12-31
+```
 
-### netkeibaへのアクセス
+バックテスト:
 
-`collector` は netkeiba.com の公開ページ・APIからレース情報・オッズ・結果を
-取得します。サイトへの負荷軽減のため `.env` の `SCRAPER_REQUEST_INTERVAL_SECONDS`
-（既定1秒）でリクエストごとに間隔を空けています。値を小さくしすぎないでください。
+```powershell
+docker compose run --rm predictor python -m src.predictor.main backtest --start 2025-01-01 --end 2025-12-31
+```
 
-### IPAT自動購入 (`BETTING_MODE=prod`)
+## 収集データ
 
-`prod` モードでは `src/predictor/betting.py` の `place_bet_production()` が
-IPAT(JRA即時購入)へPlaywright(Chromium)でログイン・購入操作を行います。
+`collector` は以下を保存します。
 
-- `.env` に `IPAT_SUBSCRIBER_NUMBER` / `IPAT_PIN` / `IPAT_PARS_NUMBER` を設定する必要があります
-- `IPAT_DRY_RUN=true`（既定）の間は、購入内容の入力・確認画面への遷移までを行い、
-  **最終的な購入ボタンは押さずログ出力のみ**を行います
-- `betting.py` 内の `SELECTORS` はIPATの実画面で検証済みの値ではありません。
-  実際に購入を有効化する前に、ログイン済みのIPAT画面で開発者ツールから
-  実際のセレクタを確認し、コードを調整してください
-- 上記の確認・調整が済むまでは `IPAT_DRY_RUN=false` にしないでください
+- レース情報: 日付、競馬場、レース番号、レース名、発走時刻、距離、芝/ダート、右左回り、馬場、天候、クラス
+- 出走馬: 馬番、馬 ID、馬名、騎手、騎手 ID、斤量、単勝オッズ、人気、着順
+- 結果: 着順、払戻、確定後のオッズ/人気
+- 馬データ: 馬 ID、馬名、父馬 ID、父馬名、過去戦績の取得日時
+- 過去戦績: レース日、競馬場、頭数、枠番、馬番、オッズ、人気、着順、騎手、斤量、距離、芝/ダート、馬場、タイム、着差、通過順、上がり 3F、馬体重
 
-賭けは購入操作の **前** に `bets.status=pending` としてDBへ記録され、購入成功で
-`placed`、dry-runで実購入しなかった場合は `dry_run`、失敗で `failed` に更新されます。
-購入処理の途中でプロセスが停止すると `pending` のまま残りますが、
-その場合も同一レースへの重複購入は行われません。
-管理コンソールに `pending` の警告が表示された場合は、IPATの投票履歴と突き合わせて
-実際に購入されたかを確認してください。
+出馬表の静的 HTML だけで単勝オッズや人気が取れない場合があります。そのため現在は、通常の HTML/API 取得に加えて Playwright + Chromium で出馬表を描画し、JavaScript 反映後の未確定オッズと人気も取得するフォールバックを持っています。
 
-### DBスキーマの変更について
+描画後も不足がある場合は、取得できた単勝オッズの昇順から人気を補完します。
 
-マイグレーションの仕組み（Alembic等）は導入していません。`init_db()` は
-存在しないテーブルを作成するだけで、既存テーブルへの列・制約の追加は行いません。
-モデル定義（`src/common/models.py`）を変更した場合は、次のいずれかが必要です。
+馬の過去戦績と血統は `collect_horses` ジョブで更新します。更新対象は、未取得または `HORSE_RESULTS_REFRESH_DAYS` より古い馬です。
 
-- データを残す必要がなければDBを作り直す: `docker compose down -v`
-- データを残す場合は手動でALTERを実行する。例（status列・ユニーク制約の追加時）:
+## Web UI
 
-  ```sql
-  ALTER TABLE bets ADD COLUMN status VARCHAR(10) NOT NULL DEFAULT 'placed';
-  ALTER TABLE entries ADD CONSTRAINT uq_entries_race_horse UNIQUE (race_id, horse_number);
-  ALTER TABLE predictions ADD CONSTRAINT uq_predictions_entry_model UNIQUE (entry_id, model_version);
-  ALTER TABLE job_runs ADD COLUMN params VARCHAR;
-  ```
+管理画面では以下を確認、操作できます。
 
-  ※ `job_runs` / `app_settings` のような新規テーブルは `init_db()` が自動作成するため対応不要です。
+- 概要: ジョブ状況、直近のレース/買い目
+- レース一覧: 年を含む日付表示、レース番号、競馬場、馬名、騎手、予測、買い目などで絞り込み
+- レース詳細: 出走馬、単勝オッズ、人気、予測スコア、買い目
+- 馬詳細: 馬名リンクから別ページで過去戦績と血統を表示
+- 買い目一覧: 判定済み、投票済み、失敗、払戻結果
+- ジョブ: 収集、学習、予測、買い目判定、払戻反映、バックテストなどの実行
+- 設定: ベット金額、スコア閾値、期待値閾値、シミュレーション/本番モードなど
 
-## 開発時のヒント
+## モデルと特徴量
 
-- サービス単体を手動実行: `docker compose run --rm collector python -m src.collector.main`
-- DBの内容を確認: `docker compose exec db psql -U horse -d horse_racing`
-- ログ確認: `docker compose logs -f predictor`
-- イメージの再ビルドが必要な変更（依存追加など）をした場合: `docker compose up -d --build`
-- フロントエンドの開発: `cd webui && npm install && npm run dev`
-  （Vite開発サーバーが http://localhost:5173 で起動し、`/api` は localhost:8000 へプロキシされます。
-  APIは `docker compose up -d webui` で起動しておくか、ローカルで
-  `uvicorn src.api.main:app --reload` を実行してください）
+学習は確定着順のあるレースを使い、各出走馬が 1 着になるかを二値分類します。モデルは LightGBM です。
+
+検証は時系列で古いデータを学習、新しいデータを検証に分け、検証データで early stopping と確率校正を行います。校正には `IsotonicRegression` を使います。
+
+現在の特徴量は以下です。
+
+基本特徴量:
+
+- `horse_number`
+- `weight`
+- `field_size`
+- `distance`
+
+カテゴリ特徴量:
+
+- `jockey_id`
+- `sire_id`
+
+過去戦績特徴量:
+
+- `career_starts`
+- `win_rate`
+- `place_rate`
+- `avg_finish_recent3`
+- `avg_finish_recent5`
+- `best_last3f_recent5`
+- `avg_last3f_recent5`
+- `days_since_last`
+- `distance_change`
+- `same_dist_starts`
+- `same_dist_avg_finish`
+- `same_surface_starts`
+- `same_surface_avg_finish`
+
+過去戦績特徴量は、対象レース日より前の `horse_results` のみから作ります。未来情報の混入を避けるため、対象レース当日以降の成績は使いません。
+
+単勝オッズと人気は収集・表示・買い目判定には使いますが、現在のモデル特徴量には含めていません。
+
+学習済みモデルはコンテナ内の `/app/data/model.pkl` に保存されます。
+
+## 買い目判定
+
+`predictor` は最新モデルの予測スコアとオッズを使い、設定条件を満たす場合に買い目を作成します。
+
+- 単勝: 最高スコアの馬について、スコア閾値と期待値閾値を満たす場合に作成
+- 馬連: 上位候補と馬連オッズから期待値を計算し、条件を満たす場合に作成
+
+買い目は `sim` と `prod` のモードを持ちます。`sim` は投票せず記録のみ、`prod` は IPAT 投票処理を試行します。
+
+ステータス:
+
+- `pending`: 投票前
+- `placed`: 投票済み、またはシミュレーション上の投票済み
+- `dry_run`: ドライラン
+- `failed`: 投票失敗
+
+## データベース
+
+主要テーブル:
+
+- `races`
+- `entries`
+- `horses`
+- `horse_results`
+- `predictions`
+- `bets`
+- `job_runs`
+- `app_settings`
+
+起動時に SQLAlchemy の `create_all()` でテーブルを作成します。既存 DB への簡易マイグレーションとして、一部の追加カラムとインデックスは `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` で補完します。
+
+本格的な履歴付きマイグレーションはまだ導入していません。
+
+## 主な環境変数
+
+`.env` で設定します。
+
+| 変数 | 内容 |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL 接続先 |
+| `COLLECT_DAYS_AHEAD` | 先何日分のレースを収集するか |
+| `HORSE_RESULTS_PER_RUN` | 1 回の馬戦績収集件数 |
+| `HORSE_RESULTS_REFRESH_DAYS` | 馬戦績を再取得する間隔 |
+| `SCRAPER_REQUEST_INTERVAL_SECONDS` | スクレイピング間隔 |
+| `BET_DECISION_WINDOW_MINUTES` | 発走何分前から買い目判定するか |
+| `BET_AMOUNT` | 1 点あたりの購入金額 |
+| `BET_SCORE_THRESHOLD` | 買い目候補にする最低予測スコア |
+| `BET_MIN_EXPECTED_VALUE` | 最低期待値 |
+| `BETTING_MODE` | `sim` または `prod` |
+| `IPAT_*` | IPAT 投票に使う認証情報 |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Web UI ログイン情報 |
+
+## 注意点
+
+- netkeiba の画面構造や API レスポンスが変わると、スクレイピング処理の修正が必要になる場合があります。
+- 未確定オッズと人気は JavaScript 描画後に出ることがあるため、collector イメージには Playwright と Chromium を入れています。
+- 過去戦績の収集件数を増やすと外部サイトへのアクセスも増えます。`SCRAPER_REQUEST_INTERVAL_SECONDS` を適切に設定してください。
+- モデルの性能は保存済みデータ量と過去戦績の充実度に大きく依存します。

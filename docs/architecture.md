@@ -1,150 +1,327 @@
-# アーキテクチャ詳細
+# アーキテクチャ
 
-## 全体フロー
+このドキュメントは、現在の実装に合わせたデータ収集、DB 構造、特徴量生成、ジョブ実行、Web UI の全体像をまとめます。
 
-    [collector] --定期実行--> レース/オッズ/結果を取得 --> DB(races, entries)
+## 全体像
 
-    [predictor] --定期実行--> 未確定レースの特徴量生成 --> モデル推論 --> DB(predictions)
-                          --> 最新予測とオッズで賭け対象を決定
-                                ├─ mode=sim:  DBに記録のみ
-                                └─ mode=prod: 実際に購入 + DBに記録
-                          --> 確定済みレースの結果から payout を計算 --> DB(bets更新)
+```text
+netkeiba
+  |
+  | race list / shutuba / odds API / result / horse DB
+  v
+collector
+  |
+  | races, entries, horses, horse_results
+  v
+PostgreSQL
+  ^
+  | predictions, bets, job_runs, settings
+  |
+predictor  <---- model.pkl
+  |
+  | API
+  v
+webui
+```
 
-    [webui] (React + FastAPI)
-        ├─ 参照: 状況・レース・賭け履歴・ジョブ履歴を表示
-        ├─ 実行依頼: DB(job_runs)へ登録 --> collector/predictorがポーリングして実行
-        └─ 設定変更: DB(app_settings)へ保存 --> 各ジョブが実行のたびに読み直す
+## サービス
+
+### db
+
+PostgreSQL です。全サービスが同じ DB を参照します。
+
+### collector
+
+レース、出走馬、オッズ、人気、結果、払戻、馬の過去戦績、血統を収集します。
+
+通常の HTML/API で足りない単勝オッズと人気は、Playwright + Chromium で出馬表を描画して補完します。
+
+主なジョブ:
+
+- `collect`: 直近のレース収集、終了レースの結果更新、馬戦績の一部更新
+- `collect_horses`: 馬の過去戦績と血統をまとめて更新
+- `backfill`: 指定期間の過去レースを補完
+
+### predictor
+
+学習済みモデルを使って出走馬ごとの勝率を予測し、期待値条件を満たす買い目を作成します。
+
+本番モードでは IPAT 投票処理も実行します。
+
+主なジョブ:
+
+- `train`: 確定結果のあるレースからモデルを学習
+- `predict`: 今後のレースに予測を保存
+- `bet_decide`: 発走前のレースに買い目を作成
+- `settle`: 払戻結果を反映
+- `backtest`: 指定期間でバックテスト
+
+### webui
+
+FastAPI が API と React のビルド成果物を配信します。
+
+主な画面:
+
+- 概要
+- レース一覧/詳細
+- 馬詳細
+- 買い目一覧
+- ジョブ実行
+- 設定
 
 ## データモデル
 
-| テーブル | 内容 |
+### races
+
+レース単位の情報です。
+
+| カラム | 内容 |
 | --- | --- |
-| `races` | レース基本情報（開催日・競馬場・レース番号・レース名など） |
-| `entries` | 出走馬情報（馬番・馬名・騎手・オッズ・確定着順）。`(race_id, horse_number)` でユニーク |
-| `predictions` | モデルによる予測スコア（`model_version` でモデルを識別）。`(entry_id, model_version)` でユニーク |
-| `bets` | 賭け記録（`mode`=`prod`/`sim`、`status`、賭け式・金額・払戻金・確定フラグ） |
-| `job_runs` | ジョブの実行キュー兼実行履歴（手動・スケジュール両方） |
-| `app_settings` | WebUIから変更できる設定のキー/値ストア（.envの値を上書き） |
+| `race_key` | netkeiba のレース ID。ユニーク |
+| `race_date` | 開催日 |
+| `venue` | 競馬場 |
+| `race_number` | レース番号 |
+| `race_name` | レース名 |
+| `start_time` | 発走時刻 |
+| `distance` | 距離 |
+| `track_type` | 芝/ダートなど |
+| `direction` | 右/左など |
+| `going` | 馬場状態 |
+| `weather` | 天候 |
+| `race_class` | クラス |
 
-`src/common/models.py` にSQLAlchemyモデルとして定義されており、各サービス起動時の
-`init_db()` 呼び出しでテーブルが自動作成されます（マイグレーションの仕組みは無いため、
-既存テーブルへの列・制約の追加は反映されません。スキーマ変更時は README の
-「DBスキーマの変更について」を参照してください）。
+### entries
 
-### `bets.status`（購入状態）
+出走馬単位の情報です。`race_id` と `horse_number` の組み合わせがユニークです。
 
-実購入(prod)の安全性のため、`bets` は購入操作の **前** にDBへコミットされ、
-`status` で購入状態を管理します。
+| カラム | 内容 |
+| --- | --- |
+| `race_id` | レース ID |
+| `horse_number` | 馬番 |
+| `horse_id` | 馬 ID |
+| `horse_name` | 馬名 |
+| `jockey` | 騎手名 |
+| `jockey_id` | 騎手 ID |
+| `weight` | 斤量 |
+| `odds` | 単勝オッズ |
+| `popularity` | 人気 |
+| `finish_position` | 着順 |
 
-- `pending`: prodで購入操作の開始前に記録された状態。購入処理の途中でプロセスが
-  落ちるとこの状態のまま残る（実際に購入されたかはIPATの投票履歴で要確認）
-- `placed`: simでの記録、またはprodで購入操作が成功した状態
-- `dry_run`: prodだが `IPAT_DRY_RUN=true` のため実購入していない状態
-- `failed`: prodで購入操作が失敗した状態（実際のお金は動いていない）
+### horses
 
-次回の予測ジョブは同一レース・同一モードの `bets` が存在すれば賭けをスキップするため、
-途中でクラッシュしても同じレースへ重複購入しません（フェイルクローズ）。
-決済(`settlement`)と回収率の集計は `status=placed` のみを対象とします。
+馬ごとの基本情報です。
 
-## 時刻の扱い
+| カラム | 内容 |
+| --- | --- |
+| `horse_id` | 馬 ID。主キー |
+| `name` | 馬名 |
+| `sire_id` | 父馬 ID |
+| `sire_name` | 父馬名 |
+| `results_fetched_at` | 過去戦績を最後に取得した時刻 |
 
-レースの発走時刻はJSTのため、DB内のdatetimeはすべて **naiveなJST** で統一します。
-現在時刻の取得は `src/common/timeutils.py` の `now_jst()` を使用し、コンテナの
-システムタイムゾーンに依存しません（Dockerfileでも `TZ=Asia/Tokyo` を設定）。
+### horse_results
 
-## モードの分離
+馬ごとの過去戦績です。`horse_id` と `race_key` の組み合わせがユニークです。
 
-`bets.mode` カラムで `prod` / `sim` を区別します。`predictor` サービスは
-賭けモード（WebUIの設定、未設定なら `.env` の `BETTING_MODE`）に応じて、
-予測結果に基づく賭けを
+| カラム | 内容 |
+| --- | --- |
+| `horse_id` | 馬 ID |
+| `race_key` | レース ID |
+| `race_date` | レース日 |
+| `venue` | 競馬場 |
+| `race_name` | レース名 |
+| `field_size` | 頭数 |
+| `post_position` | 枠番 |
+| `horse_number` | 馬番 |
+| `odds` | 単勝オッズ |
+| `popularity` | 人気 |
+| `finish_position` | 着順 |
+| `jockey` / `jockey_id` | 騎手 |
+| `weight` | 斤量 |
+| `distance` | 距離 |
+| `track_type` | 芝/ダート |
+| `going` | 馬場状態 |
+| `time_seconds` | 走破タイム秒 |
+| `margin` | 着差 |
+| `passing` | 通過順 |
+| `last_3f` | 上がり 3F |
+| `horse_weight` | 馬体重 |
 
-- `sim` モード: `bets` テーブルに記録するのみ
-- `prod` モード: `bets` テーブルへの記録に加えて `betting.place_bet_production()` で実際の購入操作を行う
+### predictions
 
-という形で扱います。WebUIは `mode` でフィルタして回収率を個別に算出するため、
-本番運用と並行してシミュレーション（バックテスト）の実績を蓄積・比較できます。
+出走馬ごとの予測スコアです。`entry_id` と `model_version` の組み合わせがユニークです。
 
-## 設定の2層構造（`src/common/dynamic_config.py`）
+### bets
 
-- `.env`（`src/common/config.py`）: DB接続・ジョブ間隔・IPAT認証情報などの静的設定。
-  変更にはコンテナの再起動が必要
-- `app_settings`: 賭けモード・賭け金額・スコア閾値・期待値下限。WebUIから変更でき、
-  各ジョブが実行のたびに `load_betting_config()` で読み直すため再起動不要。
-  値が無い・不正な場合は `.env` の値にフォールバックする
+作成された買い目です。
 
-## スケジューリングとジョブ実行（`src/common/jobs.py`）
+| カラム | 内容 |
+| --- | --- |
+| `race_id` / `entry_id` | 対象レース/馬 |
+| `mode` | `sim` または `prod` |
+| `status` | `pending`, `placed`, `dry_run`, `failed` |
+| `bet_type` | 単勝、馬連など |
+| `combination` | 馬連などの組み合わせ |
+| `amount` | 購入金額 |
+| `odds_at_bet` | 判定時オッズ |
+| `payout` | 払戻 |
+| `is_settled` | 精算済みか |
 
-`collector` / `predictor` はコンテナ内で `APScheduler` の `BlockingScheduler` を起動し、
-`.env` の `COLLECT_INTERVAL_MINUTES` / `PREDICT_INTERVAL_MINUTES` に従ってジョブを
-定期実行します（タイムゾーンは `Asia/Tokyo`）。`predictor` はAI予想、賭け対象決定、
-確定レースの払い戻しを反映する決済ジョブを持ちます。
+### job_runs / app_settings
 
-すべてのジョブ実行は `job_runs` テーブルに記録されます。WebUIからの手動実行は
-APIが `status=queued` の行を登録し、担当サービス（collect→collector、
-predict/bet_decide/settle/train→predictor）が5秒間隔のポーリングで取得して実行します。
+ジョブ履歴とアプリ設定を保存します。ジョブ履歴にはパラメータも保存します。
 
-- 同名ジョブが実行待ち/実行中の間は、新たな実行依頼を積まない（重複実行の防止）
-- サービス起動時、前回の異常終了で `running` のまま残った行は `failed` に倒す
-- ジョブの実体は `collect` / `predict` / `bet_decide` / `settle`（定期実行あり）と
-  `backfill` / `train`（手動またはCLIのみ）
-- ジョブへの引数は `job_runs.params`（JSON）で渡す。`backfill` は
-  `{"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}` を取り、
-  日付範囲のバリデーション（過去日付のみ・最大31日）はAPI側で行う
+## DB 初期化とマイグレーション
 
-## webuiサービス（`src/api/` + `webui/`）
+起動時に SQLAlchemy の `Base.metadata.create_all()` で未作成テーブルを作成します。
 
-FastAPI製のAPIが参照・実行依頼・設定変更のエンドポイント（`/api/*`）を提供し、
-ビルド済みのReactフロントエンド（`webui/dist`）も同じプロセスから配信します。
-ジョブはAPIプロセス内では実行しないため、webuiの停止・再起動は収集・予測の
-定期実行に影響しません。認証は無いため、ポートはループバックのみに公開しています。
+既存 DB に対しては、以下のような追加カラムやインデックスを簡易的に補完します。
 
-## 実装メモ
+- `entries`: `jockey_id`, `popularity`, `horse_id`
+- `races`: `distance`, `track_type`, `direction`, `going`, `weather`, `race_class`
+- `horses`: `sire_id`, `sire_name`
+- `bets`: `combination`
+- `entries.horse_id` のインデックス
 
-### `src/collector/scraper.py`（netkeiba.com）
+Alembic のような履歴付きマイグレーションは未導入です。
 
-- `fetch_upcoming_races(target_date)`: `race_list_sub.html` から指定日の `race_id`
-  一覧・発走時刻を取得し、各 `race_id` の `shutuba.html`（出走馬）と
-  `api_get_jra_odds.html`（単勝オッズAPI）を組み合わせて出走馬情報を構築する
-  （発走時刻を過ぎたレースは除外する）
-- collectorは当日から `COLLECT_DAYS_AHEAD` 日先（既定3日）までを毎回収集する。
-  JRAは主に土日開催のため、当日のみだと平日は常に0件になる。先読み収集した
-  レースの出走馬・オッズは収集のたびにupsertで最新化される
-- 過去レースの一括取得は `src/collector/backfill.py`（CLI専用）。
-  `include_started=True` で発走済みレースも収集し、確定結果まで反映する。
-  netkeibaのオッズAPIは過去レースにも最終オッズを返すため特徴量も揃う
-- `fetch_race_results(race_key)`: `result.html` から確定着順と払い戻し
-  （`単勝`/`複勝`）を取得する。出走取消・除外・競走中止の馬は着順が数値に
-  ならないため結果に含まれない（`entries.finish_position` はNoneのまま残る）
-- collectorの結果反映は「1頭でも着順が反映済みのレース」をスキップし、
-  発走から7日を過ぎたレースは（結果が取れないままでも）対象から外す
-  （開催中止等のレースを無限に再取得しないため）
-- `race_key`（= `race_id`）は12桁の文字列で、`YYYY` + 競馬場コード(2) + 回(2) +
-  日(2) + レース番号(2) から成る。`parse_race_key()` で各要素に分解でき、
-  `betting.py` のIPATレース選択でも利用する
-- `.env` の `SCRAPER_REQUEST_INTERVAL_SECONDS` でリクエスト間隔を制御する
-  （サイトへの負荷軽減のため）
+## 収集フロー
 
-### `src/predictor/features.py` / `model.py` / `train.py`
+### レースと出馬表
 
-- 特徴量は `horse_number` / `weight` / `field_size` / `jockey`。オッズはAI予想モデルに入れない。
-- モデルは LightGBM（`LGBMClassifier`, `objective="binary"`）で、`data/model.pkl` に
-  `{"model", "feature_columns", "categorical_features", "version"}` の辞書として `joblib` で保存・読み込みする。
-- 学習は `python -m src.predictor.train` で実行する。確定済み
-  （`finish_position` が設定済み）のレースが20件未満の場合は学習をスキップする。
+1. `race_list_sub.html` から対象日のレース ID を取得します。
+2. `race/shutuba.html` からレース情報と出走馬を解析します。
+3. 出走馬の馬 ID、馬名、騎手 ID、騎手名、斤量を保存します。
+4. 静的 HTML 上に単勝オッズ/人気があれば保存します。
+5. netkeiba のオッズ API から単勝オッズを取得します。
+6. 不足があれば Playwright で出馬表を描画し、JavaScript 反映後の `odds-*` / `ninki-*` 要素から未確定オッズと人気を取得します。
+7. まだ人気が不足している場合は、単勝オッズの昇順から補完します。
 
-### AI予想と賭け対象決定
+出走馬の既存行を更新するとき、オッズと人気は新しい値が取得できた場合だけ上書きします。
 
-- `predict` ジョブはAI予想のみを行う。対象は「未来レース」かつ「全出走馬の着順が未設定」のレースで、オッズは不要。最新モデルと同じ `model_version` の予測が既にあるレースはスキップする。
-- `bet_decide` ジョブは賭け対象決定のみを行う。対象は「未確定」「発走まで `BET_DECISION_WINDOW_MINUTES` 分以内」「最新予測あり」「全出走馬のオッズ入力済み」のレース。
-- `decide_bets(race, predictions, config)`: 予測スコアが最も高い馬について、「スコアが閾値以上」かつ「期待値（スコア×単勝オッズ）が下限以上」の場合に単勝で指定金額を賭ける `Bet` を返す。
-- 賭け対象決定は `score × odds` の期待値を使うため、オッズ未入力のレースでは `bets` を作成しない。
-- `place_bet_production(bet)`: IPAT(JRA即時購入)へのPlaywright(Chromium)自動操作。安全装置や注意点は [README](../README.md) を参照。
+### 結果と払戻
 
-### `src/predictor/settlement.py`
+終了したレースは `result.html` から着順と払戻を取得します。
 
-- `settle_pending_races()`: 未確定の `bets`（`status=placed` のみ）のうち、
-  対象レースの `entries.finish_position` が確定済みのものについて
-  `fetch_race_results()` の `payouts` から該当馬番の払戻金を取得し、
-  `bets.payout` / `is_settled` を更新する
-- レース結果は確定しているのに賭けた馬の着順が無い場合（出走取消・除外）は、
-  IPATの返還にならい賭け金をそのまま `payout` として確定する
+直近の終了レースは定期収集時に再確認されます。
+
+### 馬の過去戦績と血統
+
+馬 ID を持つ出走馬を対象に、以下を取得します。
+
+- `https://db.netkeiba.com/horse/result/{horse_id}/`
+- `https://db.netkeiba.com/horse/ped/{horse_id}/`
+
+過去戦績は馬ごとに既存行を削除してから最新の一覧を保存します。血統は現在、父馬 ID と父馬名を特徴量用に保存します。
+
+## 特徴量生成
+
+特徴量は `src/predictor/features.py` と `src/predictor/history.py` で作られます。
+
+### 基本特徴量
+
+- `horse_number`
+- `weight`
+- `field_size`
+- `distance`
+
+### カテゴリ特徴量
+
+- `jockey_id`
+- `sire_id`
+
+未取得の場合は `unknown` として扱います。
+
+### 過去戦績特徴量
+
+- `career_starts`
+- `win_rate`
+- `place_rate`
+- `avg_finish_recent3`
+- `avg_finish_recent5`
+- `best_last3f_recent5`
+- `avg_last3f_recent5`
+- `days_since_last`
+- `distance_change`
+- `same_dist_starts`
+- `same_dist_avg_finish`
+- `same_surface_starts`
+- `same_surface_avg_finish`
+
+対象レースより前の `horse_results` だけを使用します。
+
+同距離実績は対象距離から 200m 以内を同距離として扱います。
+
+現在のモデルでは、単勝オッズと人気を特徴量に入れていません。これらは表示、収集品質確認、買い目判定、バックテストで使います。
+
+## 学習と予測
+
+学習対象は着順が確定しているレースです。各出走馬について `finish_position == 1` を正例にします。
+
+学習手順:
+
+1. 確定レースと出走馬を読み込みます。
+2. レース日順に並べ、古いデータを学習、新しいデータを検証に分けます。
+3. LightGBM の二値分類モデルを学習します。
+4. 検証データで early stopping します。
+5. 検証データの確率で `IsotonicRegression` による校正器を作ります。
+6. 全データで最終モデルを学習し、モデル、特徴量一覧、カテゴリ特徴量、校正器、バージョンを `/app/data/model.pkl` に保存します。
+
+予測時は最新モデルを読み込み、未確定の今後レースに対して `predictions` を保存します。同じ `model_version` の予測が既にある場合は重複保存しません。
+
+## 買い目判定
+
+買い目判定は発走前の一定時間内にあるレースを対象にします。時間幅は `BET_DECISION_WINDOW_MINUTES` で設定します。
+
+単勝:
+
+- 予測スコアが最も高い馬を候補にします。
+- `BET_SCORE_THRESHOLD` を満たす必要があります。
+- `score * odds` が `BET_MIN_EXPECTED_VALUE` 以上である必要があります。
+
+馬連:
+
+- 上位候補の組み合わせと馬連オッズを使って期待値を計算します。
+- 条件を満たした組み合わせを買い目として保存します。
+
+同じレース、同じモードの買い目は重複して作成しません。
+
+## ジョブ管理
+
+ジョブは `job_runs` に記録されます。主なジョブ名は以下です。
+
+- `collect`
+- `backfill`
+- `collect_horses`
+- `predict`
+- `bet_decide`
+- `settle`
+- `train`
+- `backtest`
+
+同じジョブがキュー済みまたは実行中の場合は重複登録しません。一定時間以上 `running` のまま残ったジョブは失敗扱いに戻します。
+
+`predictor` は起動時に `predict` と `bet_decide` を一度実行し、その後は設定された間隔で定期実行します。キュー済みジョブは短い間隔でポーリングされます。
+
+## Web API
+
+主な API:
+
+- `GET /api/races`
+- `GET /api/races/{race_id}`
+- `GET /api/horses/{horse_id}`
+- `GET /api/bets`
+- `GET /api/jobs`
+- `POST /api/jobs/{job_name}/run`
+- `GET /api/settings`
+- `POST /api/settings`
+- 認証関連エンドポイント
+
+フロントエンドの `/horses/{horse_id}` は馬詳細ページです。レース一覧の馬名リンクから別ページで開けます。
+
+## 運用上の注意
+
+- netkeiba の DOM や API が変わると、スクレイパーの修正が必要です。
+- Playwright による描画取得は通常の HTML/API 取得より重いため、必要な場合だけフォールバックとして使います。
+- 過去戦績の充実度がモデル特徴量に直結します。新しい DB ではまず `backfill` と `collect_horses` を十分に実行してください。
+- DB スキーマの変更履歴管理はまだ簡易方式です。破壊的なスキーマ変更を行う場合は、事前に DB バックアップを取ってください。
