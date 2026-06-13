@@ -13,7 +13,7 @@ services:
       # 認証情報が弱い既定値のため、ホストのループバックのみに公開する
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horse}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horse} -d ${POSTGRES_DB:-horse_racing}"]
       interval: 5s
       timeout: 5s
       retries: 5

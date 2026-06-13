@@ -9,8 +9,11 @@ type SortKey =
   | "ai_rank"
   | "horse_number"
   | "horse_name"
+  | "sex_age"
   | "jockey"
+  | "trainer"
   | "weight"
+  | "horse_weight"
   | "odds"
   | "popularity"
   | "score"
@@ -22,10 +25,19 @@ interface SortState {
   dir: "asc" | "desc";
 }
 
+function entrySortValue(entry: RaceEntry, key: SortKey): string | number | null {
+  if (key === "sex_age") {
+    const sex = entry.sex ?? "";
+    const age = entry.age ?? "";
+    return sex || age !== "" ? `${sex}${age}` : null;
+  }
+  return entry[key];
+}
+
 function sortEntries(entries: RaceEntry[], sort: SortState): RaceEntry[] {
   return [...entries].sort((a, b) => {
-    const av = a[sort.key];
-    const bv = b[sort.key];
+    const av = entrySortValue(a, sort.key);
+    const bv = entrySortValue(b, sort.key);
     const aEmpty = av === null || av === undefined;
     const bEmpty = bv === null || bv === undefined;
     if (aEmpty && bEmpty) return 0;
@@ -181,11 +193,11 @@ function RaceDetailView({ raceId }: { raceId: number }) {
             <SortHeader label="AI順位" sortKey="ai_rank" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="馬番" sortKey="horse_number" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="馬名" sortKey="horse_name" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <th>性齢</th>
+            <SortHeader label="性齢" sortKey="sex_age" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="騎手" sortKey="jockey" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <th>厩舎</th>
+            <SortHeader label="厩舎" sortKey="trainer" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="斤量" sortKey="weight" defaultDir="desc" sort={sort} onSort={handleSort} />
-            <th>馬体重</th>
+            <SortHeader label="馬体重" sortKey="horse_weight" defaultDir="desc" sort={sort} onSort={handleSort} />
             <SortHeader label="オッズ" sortKey="odds" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="人気" sortKey="popularity" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="AI勝率" sortKey="score" defaultDir="desc" sort={sort} onSort={handleSort} />
