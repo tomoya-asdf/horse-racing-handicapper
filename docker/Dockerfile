@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 tzdata \
@@ -10,7 +10,8 @@ ENV PYTHONPATH=/app \
     TZ=Asia/Tokyo
 
 COPY docker/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && playwright install --with-deps chromium
 
 COPY src ./src
 
