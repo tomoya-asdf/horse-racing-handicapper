@@ -16,6 +16,10 @@ class Settings:
     BETTING_MODE: str = os.environ.get("BETTING_MODE", "sim")
     COLLECT_INTERVAL_MINUTES: int = int(os.environ.get("COLLECT_INTERVAL_MINUTES", "60"))
     PREDICT_INTERVAL_MINUTES: int = int(os.environ.get("PREDICT_INTERVAL_MINUTES", "30"))
+    COLLECT_HORSES_INTERVAL_MINUTES: int = int(
+        os.environ.get("COLLECT_HORSES_INTERVAL_MINUTES", "43200")
+    )
+    TRAIN_INTERVAL_MINUTES: int = int(os.environ.get("TRAIN_INTERVAL_MINUTES", "43200"))
 
     # 何日先のレースまで収集するか。JRAは主に土日開催のため、平日でも
     # 数日先を見ないと「取得レース=0件」になる(0=当日のみ)
@@ -24,6 +28,8 @@ class Settings:
     # 賭け対象決定を行うのは発走何分前までか。AI予想はオッズ不要で未確定レース全体を対象にし、
     # オッズを使う賭け対象決定だけを発走が近いレースに限定する。
     BET_DECISION_WINDOW_MINUTES: int = int(os.environ.get("BET_DECISION_WINDOW_MINUTES", "60"))
+    BET_DECISION_LEAD_MINUTES: int = int(os.environ.get("BET_DECISION_LEAD_MINUTES", "10"))
+    SETTLE_DELAY_MINUTES: int = int(os.environ.get("SETTLE_DELAY_MINUTES", "20"))
 
     # 賭け戦略
     BET_AMOUNT: float = float(os.environ.get("BET_AMOUNT", "100"))

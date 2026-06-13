@@ -7,6 +7,7 @@ from src.collector import scraper
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
+from src.common.dynamic_config import load_scheduled_job_config
 from src.common.models import Entry, Horse, HorseResult, Race
 from src.common.timeutils import now_jst
 
@@ -258,7 +259,21 @@ def _run_backfill(params: dict) -> str:
 
 
 def _scheduled_collect() -> None:
+    config = load_scheduled_job_config(jobs.COLLECT)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(jobs.COLLECT, config.interval_minutes):
+        return
     jobs.run_scheduled(jobs.COLLECT, _run_collect)
+
+
+def _scheduled_collect_horses() -> None:
+    config = load_scheduled_job_config(jobs.COLLECT_HORSES)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(jobs.COLLECT_HORSES, config.interval_minutes):
+        return
+    jobs.run_scheduled(jobs.COLLECT_HORSES, _run_collect_horses)
 
 
 def _poll_queued_jobs() -> None:
@@ -275,14 +290,14 @@ def main() -> None:
     init_db()
     jobs.recover_stale([jobs.COLLECT, jobs.BACKFILL, jobs.COLLECT_HORSES])
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
-    scheduler.add_job(
-        _scheduled_collect, "interval", minutes=settings.COLLECT_INTERVAL_MINUTES
-    )
+    scheduler.add_job(_scheduled_collect, "interval", minutes=1)
+    scheduler.add_job(_scheduled_collect_horses, "interval", minutes=1)
     scheduler.add_job(
         _poll_queued_jobs, "interval", seconds=jobs.POLL_INTERVAL_SECONDS
     )
     logger.info("collector started: interval=%s min", settings.COLLECT_INTERVAL_MINUTES)
     _scheduled_collect()
+    _scheduled_collect_horses()
     scheduler.start()
 
 

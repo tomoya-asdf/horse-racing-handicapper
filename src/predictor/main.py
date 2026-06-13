@@ -7,7 +7,7 @@ from src.collector import scraper
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
-from src.common.dynamic_config import BettingConfig, load_betting_config
+from src.common.dynamic_config import BettingConfig, load_betting_config, load_scheduled_job_config
 from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race
 from src.common.timeutils import now_jst
 from src.predictor import backtest, betting, model, settlement, train
@@ -29,6 +29,83 @@ def _is_unfinished_race(race: Race) -> bool:
 
 def _has_complete_odds(race: Race) -> bool:
     return bool(race.entries) and all(entry.odds is not None and entry.odds > 0 for entry in race.entries)
+
+
+def _bet_decision_target_minutes(lead_minutes: int) -> int:
+    return min(settings.BET_DECISION_WINDOW_MINUTES, lead_minutes)
+
+
+def _next_bet_decide_due_at(lead_minutes: int):
+    session = get_session()
+    try:
+        race = (
+            session.query(Race)
+            .filter(
+                Race.start_time.isnot(None),
+                Race.start_time > now_jst(),
+                Race.entries.any(),
+                ~Race.entries.any(Entry.finish_position.isnot(None)),
+            )
+            .order_by(Race.start_time)
+            .first()
+        )
+        if race is None or race.start_time is None:
+            return None
+        return race.start_time - timedelta(minutes=lead_minutes)
+    finally:
+        session.close()
+
+
+def _next_settle_due_at(delay_minutes: int):
+    session = get_session()
+    try:
+        row = (
+            session.query(Race.start_time)
+            .join(Bet, Bet.race_id == Race.id)
+            .filter(
+                Bet.is_settled.is_(False),
+                Bet.status == BetStatus.PLACED.value,
+                Race.start_time.isnot(None),
+            )
+            .order_by(Race.start_time)
+            .first()
+        )
+        if row is None or row[0] is None:
+            return None
+        return row[0] + timedelta(minutes=delay_minutes)
+    finally:
+        session.close()
+
+
+def _refresh_race_odds(session, race: Race, day_cache: dict) -> None:
+    """Refresh the target race snapshot so bet decisions use current win odds."""
+    if race.race_date not in day_cache:
+        day_cache[race.race_date] = scraper.fetch_upcoming_races(race.race_date)
+    latest = next((item for item in day_cache[race.race_date] if item["race_key"] == race.race_key), None)
+    if latest is None:
+        return
+
+    race.start_time = latest["start_time"]
+    for field in ("distance", "track_type", "direction", "going", "weather", "race_class"):
+        value = latest.get(field)
+        if value is not None:
+            setattr(race, field, value)
+
+    entries_by_number = {entry.horse_number: entry for entry in race.entries}
+    for entry_data in latest["entries"]:
+        entry = entries_by_number.get(entry_data["horse_number"])
+        if entry is None:
+            continue
+        entry.horse_name = entry_data["horse_name"]
+        entry.horse_id = entry_data.get("horse_id")
+        entry.jockey = entry_data["jockey"]
+        entry.jockey_id = entry_data.get("jockey_id")
+        entry.weight = entry_data["weight"]
+        if entry_data.get("odds") is not None:
+            entry.odds = entry_data["odds"]
+        if entry_data.get("popularity") is not None:
+            entry.popularity = entry_data["popularity"]
+    session.flush()
 
 
 def _predict_race(
@@ -157,6 +234,14 @@ def _run_bet_decide(params: dict) -> str:
     skipped_already_bet = 0
     new_bets = 0
     failed_races = 0
+    schedule_config = load_scheduled_job_config(jobs.BET_DECIDE)
+    lead_minutes = (
+        schedule_config.before_start_minutes
+        if schedule_config is not None and schedule_config.before_start_minutes is not None
+        else settings.BET_DECISION_LEAD_MINUTES
+    )
+    target_minutes = _bet_decision_target_minutes(lead_minutes)
+    day_cache: dict = {}
 
     session = get_session()
     try:
@@ -166,7 +251,7 @@ def _run_bet_decide(params: dict) -> str:
                 Race.start_time.isnot(None),
                 Race.start_time > now,
                 Race.start_time
-                <= now + timedelta(minutes=settings.BET_DECISION_WINDOW_MINUTES),
+                <= now + timedelta(minutes=target_minutes),
                 Race.entries.any(),
                 ~Race.entries.any(Entry.finish_position.isnot(None)),
             )
@@ -181,6 +266,8 @@ def _run_bet_decide(params: dict) -> str:
                 if not predictions:
                     skipped_no_predictions += 1
                     continue
+
+                _refresh_race_odds(session, race, day_cache)
 
                 if not _has_complete_odds(race):
                     skipped_no_complete_odds += 1
@@ -206,7 +293,7 @@ def _run_bet_decide(params: dict) -> str:
 
     summary = (
         f"mode={config.mode}, "
-        f"対象レース(発走{settings.BET_DECISION_WINDOW_MINUTES}分以内・未確定・オッズ確認対象)="
+        f"対象レース(発走{target_minutes}分以内・最新オッズ確認対象)="
         f"{target_races}件, "
         f"新規賭け={new_bets}件, "
         f"予測なし={skipped_no_predictions}件, "
@@ -237,15 +324,55 @@ def _run_backtest(params: dict) -> str:
 
 
 def _scheduled_predict() -> None:
+    config = load_scheduled_job_config(jobs.PREDICT)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(jobs.PREDICT, config.interval_minutes):
+        return
     jobs.run_scheduled(jobs.PREDICT, _run_predict)
 
 
 def _scheduled_bet_decide() -> None:
+    config = load_scheduled_job_config(jobs.BET_DECIDE)
+    if config is None or not config.enabled:
+        return
+    before_start_minutes = (
+        config.before_start_minutes
+        if config.before_start_minutes is not None
+        else settings.BET_DECISION_LEAD_MINUTES
+    )
+    due_at = _next_bet_decide_due_at(before_start_minutes)
+    if due_at is None:
+        return
+    if not jobs.scheduled_run_due(jobs.BET_DECIDE, config.interval_minutes, due_at=due_at):
+        return
     jobs.run_scheduled(jobs.BET_DECIDE, _run_bet_decide)
 
 
 def _scheduled_settle() -> None:
+    config = load_scheduled_job_config(jobs.SETTLE)
+    if config is None or not config.enabled:
+        return
+    after_start_minutes = (
+        config.after_start_minutes
+        if config.after_start_minutes is not None
+        else settings.SETTLE_DELAY_MINUTES
+    )
+    due_at = _next_settle_due_at(after_start_minutes)
+    if due_at is None:
+        return
+    if not jobs.scheduled_run_due(jobs.SETTLE, config.interval_minutes, due_at=due_at):
+        return
     jobs.run_scheduled(jobs.SETTLE, _run_settle)
+
+
+def _scheduled_train() -> None:
+    config = load_scheduled_job_config(jobs.TRAIN)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(jobs.TRAIN, config.interval_minutes):
+        return
+    jobs.run_scheduled(jobs.TRAIN, _run_train)
 
 
 def _poll_queued_jobs() -> None:
@@ -264,13 +391,15 @@ def main() -> None:
     init_db()
     jobs.recover_stale([jobs.PREDICT, jobs.BET_DECIDE, jobs.SETTLE, jobs.TRAIN, jobs.BACKTEST])
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
-    scheduler.add_job(_scheduled_predict, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
-    scheduler.add_job(_scheduled_bet_decide, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
-    scheduler.add_job(_scheduled_settle, "interval", minutes=settings.PREDICT_INTERVAL_MINUTES)
+    scheduler.add_job(_scheduled_predict, "interval", minutes=1)
+    scheduler.add_job(_scheduled_bet_decide, "interval", minutes=1)
+    scheduler.add_job(_scheduled_settle, "interval", minutes=1)
+    scheduler.add_job(_scheduled_train, "interval", minutes=1)
     scheduler.add_job(_poll_queued_jobs, "interval", seconds=jobs.POLL_INTERVAL_SECONDS)
     logger.info("predictor started")
     _scheduled_predict()
     _scheduled_bet_decide()
+    _scheduled_train()
     scheduler.start()
 
 

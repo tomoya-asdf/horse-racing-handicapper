@@ -1,18 +1,22 @@
 import { useState } from "react";
-import { getJSON, postJSON, formatDateTime } from "../api";
+import { formatDateTime, getJSON, postJSON } from "../api";
 import { ErrorNote, StatusBadge, usePolling } from "../components";
-import type { JobRun } from "../types";
+import type { JobsResponse } from "../types";
 
 const JOB_BUTTONS = [
-  { name: "collect", label: "データ収集", description: "netkeibaからレース・オッズ・結果を取得" },
+  { name: "collect", label: "データ収集", description: "レース、出馬表、オッズ、結果を取得" },
   {
     name: "collect_horses",
-    label: "馬過去成績収集",
-    description: "出走馬の過去成績(horse_results)を未取得分から収集",
+    label: "馬過去戦績収集",
+    description: "出走馬の過去戦績と血統を補完",
   },
-  { name: "predict", label: "AI予想", description: "未確定レースにオッズ不要の予測スコアを作成" },
-  { name: "bet_decide", label: "賭け対象決定", description: "予測とオッズから賭け対象を決定" },
-  { name: "settle", label: "決済", description: "確定したレースの払戻を反映" },
+  { name: "predict", label: "AI予想", description: "未確定レースへ予測スコアを作成" },
+  {
+    name: "bet_decide",
+    label: "賭け対象決定",
+    description: "予測と最新オッズから買い目を判定",
+  },
+  { name: "settle", label: "決済", description: "確定済みレースの払戻を反映" },
   { name: "train", label: "モデル学習", description: "蓄積データからモデルを再学習" },
 ];
 
@@ -23,7 +27,7 @@ function isoDaysAgo(days: number): string {
 }
 
 export default function JobsPage() {
-  const { data, error } = usePolling<{ jobs: JobRun[] }>(() => getJSON("/api/jobs?limit=50"), 5000);
+  const { data, error } = usePolling<JobsResponse>(() => getJSON("/api/jobs?limit=50"), 5000);
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [backfillStart, setBackfillStart] = useState(isoDaysAgo(14));
@@ -47,7 +51,7 @@ export default function JobsPage() {
   };
 
   const confirmAndRunJob = (name: string, label: string, body?: unknown) => {
-    const ok = window.confirm(`${label}を実行しますか？\n必要な場合だけ実行してください。`);
+    const ok = window.confirm(`${label}を実行しますか?\n必要な場合だけ実行してください。`);
     if (!ok) return;
     void runJob(name, label, body);
   };
@@ -56,7 +60,7 @@ export default function JobsPage() {
     <div>
       <h2>手動実行</h2>
       <p className="muted">
-        実行依頼はキューに登録され、collector / predictor サービスが数秒間隔で取得して実行します。
+        実行依頼はキューに登録され、collector / predictor サービスが短い間隔で取得して実行します。
       </p>
       <div className="job-buttons">
         {JOB_BUTTONS.map((job) => (
@@ -73,8 +77,8 @@ export default function JobsPage() {
 
       <h2>過去データ取得(バックフィル)</h2>
       <p className="muted">
-        初回セットアップ時など、過去の開催日のレース・最終オッズ・確定結果をさかのぼって取得します。
-        モデル学習には結果確定済みレースが20件以上必要です。
+        初回セットアップ時など、過去の開催日のレース、最終オッズ、確定結果をまとめて取得します。
+        モデル学習には確定済みレースが50件以上必要です。
       </p>
       <div className="backfill-form">
         <label>
@@ -104,9 +108,7 @@ export default function JobsPage() {
 
       <h2>回収率バックテスト</h2>
       <p className="muted">
-        指定期間の確定レースで、開始日より前のデータだけで学習したモデルを使って予測・賭け・決済を
-        シミュレートし、的中率・回収率を算出します(現在の賭け設定＋期待値下限のスイープ)。
-        結果は下の実行履歴の「結果」欄に表示されます。
+        指定期間の確定レースで、予測、賭け、決済をシミュレートします。結果は実行履歴に表示されます。
       </p>
       <div className="backfill-form">
         <label>

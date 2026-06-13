@@ -21,6 +21,11 @@ export interface JobRun {
   finished_at: string | null;
 }
 
+export interface JobsResponse {
+  jobs: JobRun[];
+  scheduled_jobs: ScheduledJobSetting[];
+}
+
 export interface AuthStatus {
   configured: boolean;
   authenticated: boolean;
@@ -32,16 +37,41 @@ export interface SettingsView {
     bet_amount: number;
     bet_score_threshold: number;
     bet_min_expected_value: number;
+    schedule_collect_enabled: boolean;
+    schedule_predict_enabled: boolean;
+    schedule_bet_decide_enabled: boolean;
+    schedule_settle_enabled: boolean;
+    schedule_collect_horses_enabled: boolean;
+    schedule_train_enabled: boolean;
+    schedule_collect_interval_minutes: number;
+    schedule_predict_interval_minutes: number;
+    schedule_collect_horses_interval_minutes: number;
+    schedule_train_interval_minutes: number;
+    schedule_bet_decide_before_start_minutes: number;
+    schedule_settle_after_start_minutes: number;
   };
   readonly: {
-    collect_interval_minutes: number;
-    predict_interval_minutes: number;
-    bet_decision_window_minutes: number;
     scraper_request_interval_seconds: number;
     ipat_dry_run: boolean;
     ipat_credentials_configured: boolean;
   };
+  scheduled_jobs: ScheduledJobSetting[];
   env_settings: EnvSetting[];
+}
+
+export interface ScheduledJobSetting {
+  job_name: string;
+  enabled_key: keyof SettingsView["editable"];
+  interval_key: keyof SettingsView["editable"] | null;
+  before_start_key: keyof SettingsView["editable"] | null;
+  after_start_key: keyof SettingsView["editable"] | null;
+  label: string;
+  description: string;
+  enabled: boolean;
+  interval_minutes: number | null;
+  before_start_minutes: number | null;
+  after_start_minutes: number | null;
+  next_run_at: string | null;
 }
 
 export interface EnvSetting {

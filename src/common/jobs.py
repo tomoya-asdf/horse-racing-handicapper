@@ -41,6 +41,39 @@ POLL_INTERVAL_SECONDS = 5
 STALE_RUNNING_MINUTES = 60
 
 
+def scheduled_run_due(job_name: str, interval_minutes: int, due_at=None) -> bool:
+    """Return True when a scheduled job is enabled to start a new run now."""
+    now = now_jst()
+    if due_at is not None and due_at > now:
+        return False
+
+    session = get_session()
+    try:
+        running = (
+            session.query(JobRun.id)
+            .filter(
+                JobRun.job_name == job_name,
+                JobRun.status == JobStatus.RUNNING.value,
+                JobRun.started_at > now - timedelta(minutes=STALE_RUNNING_MINUTES),
+            )
+            .first()
+        )
+        if running is not None:
+            return False
+
+        latest = (
+            session.query(JobRun)
+            .filter(JobRun.job_name == job_name, JobRun.trigger == JobTrigger.SCHEDULED.value)
+            .order_by(JobRun.started_at.desc().nullslast(), JobRun.created_at.desc())
+            .first()
+        )
+        if latest is None or latest.started_at is None:
+            return True
+        return latest.started_at <= now - timedelta(minutes=interval_minutes)
+    finally:
+        session.close()
+
+
 def enqueue(job_name: str, params: dict | None = None) -> dict:
     """ジョブの実行を依頼する。同名ジョブが実行待ち/実行中なら新規追加しない。"""
     session = get_session()

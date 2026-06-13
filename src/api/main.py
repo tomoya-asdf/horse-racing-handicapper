@@ -20,7 +20,12 @@ from sqlalchemy.orm import selectinload
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
-from src.common.dynamic_config import get_settings_view, load_betting_config, save_settings
+from src.common.dynamic_config import (
+    get_settings_view,
+    load_betting_config,
+    save_settings,
+    scheduled_jobs_view,
+)
 from src.common.models import (
     Bet,
     BetStatus,
@@ -644,9 +649,18 @@ def list_jobs(limit: int = 50) -> dict:
             .limit(min(limit, 200))
             .all()
         )
-        return {"jobs": [_job_to_dict(run) for run in runs]}
+        return {"jobs": [_job_to_dict(run) for run in runs], "scheduled_jobs": scheduled_jobs_view()}
     finally:
         session.close()
+
+
+@app.put("/api/jobs/schedule", dependencies=[Depends(require_admin)])
+def update_job_schedule(values: dict) -> dict:
+    try:
+        updated = save_settings(values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"scheduled_jobs": updated["scheduled_jobs"]}
 
 
 def _validate_backfill_params(body: dict) -> dict:
