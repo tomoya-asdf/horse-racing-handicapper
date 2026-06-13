@@ -1,11 +1,8 @@
-from pathlib import Path
-
 import joblib
 import pandas as pd
 
+from src.common.paths import MODEL_PATH
 from src.predictor.features import FEATURE_COLUMNS
-
-MODEL_PATH = Path("/app/data/model.pkl")
 
 
 def load_model() -> dict:

@@ -2,8 +2,8 @@
 FROM node:20-alpine AS frontend
 
 WORKDIR /build
-COPY webui/package.json ./
-RUN npm install
+COPY webui/package*.json ./
+RUN npm ci
 COPY webui/ ./
 RUN npm run build
 

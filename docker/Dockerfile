@@ -10,7 +10,8 @@ ENV PYTHONPATH=/app \
     TZ=Asia/Tokyo
 
 COPY docker/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt \
+COPY docker/requirements-collector.txt ./requirements-collector.txt
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-collector.txt \
     && playwright install --with-deps chromium
 
 COPY src ./src

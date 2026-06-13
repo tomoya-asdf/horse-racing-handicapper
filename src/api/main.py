@@ -32,8 +32,8 @@ from src.common.models import (
     Prediction,
     Race,
 )
+from src.common.paths import MODEL_PATH
 from src.common.timeutils import now_jst
-from src.predictor.model import MODEL_PATH
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

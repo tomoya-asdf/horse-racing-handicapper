@@ -18,9 +18,9 @@ from sklearn.metrics import log_loss, roc_auc_score
 
 from src.common.db import get_session, init_db
 from src.common.models import Entry, Race
+from src.common.paths import MODEL_PATH
 from src.predictor.features import CATEGORICAL_FEATURES, FEATURE_COLUMNS, build_features
 from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
-from src.predictor.model import MODEL_PATH
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
