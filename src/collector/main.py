@@ -55,15 +55,24 @@ def _upsert_races(races: list[dict]) -> None:
 
                 entry.horse_name = entry_data["horse_name"]
                 entry.horse_id = entry_data.get("horse_id")
+                entry.sex = entry_data.get("sex")
+                entry.age = entry_data.get("age")
                 entry.jockey = entry_data["jockey"]
                 entry.jockey_id = entry_data.get("jockey_id")
+                entry.trainer = entry_data.get("trainer")
+                entry.trainer_id = entry_data.get("trainer_id")
                 entry.weight = entry_data["weight"]
-                # オッズ・人気は収集の度に更新するが、取得できなかった(None)場合に
+                # オッズ・人気・馬体重は収集の度に更新するが、取得できなかった(None)場合に
                 # 既存の値を消さないよう、値があるときだけ上書きする
+                # (馬体重は当日計量のため、数日先の収集ではNoneのことが多い)
                 if entry_data.get("odds") is not None:
                     entry.odds = entry_data["odds"]
                 if entry_data.get("popularity") is not None:
                     entry.popularity = entry_data["popularity"]
+                if entry_data.get("horse_weight") is not None:
+                    entry.horse_weight = entry_data["horse_weight"]
+                if entry_data.get("horse_weight_diff") is not None:
+                    entry.horse_weight_diff = entry_data["horse_weight_diff"]
 
         session.commit()
     finally:

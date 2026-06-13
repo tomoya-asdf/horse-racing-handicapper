@@ -98,13 +98,21 @@ def _refresh_race_odds(session, race: Race, day_cache: dict) -> None:
             continue
         entry.horse_name = entry_data["horse_name"]
         entry.horse_id = entry_data.get("horse_id")
+        entry.sex = entry_data.get("sex")
+        entry.age = entry_data.get("age")
         entry.jockey = entry_data["jockey"]
         entry.jockey_id = entry_data.get("jockey_id")
+        entry.trainer = entry_data.get("trainer")
+        entry.trainer_id = entry_data.get("trainer_id")
         entry.weight = entry_data["weight"]
         if entry_data.get("odds") is not None:
             entry.odds = entry_data["odds"]
         if entry_data.get("popularity") is not None:
             entry.popularity = entry_data["popularity"]
+        if entry_data.get("horse_weight") is not None:
+            entry.horse_weight = entry_data["horse_weight"]
+        if entry_data.get("horse_weight_diff") is not None:
+            entry.horse_weight_diff = entry_data["horse_weight_diff"]
     session.flush()
 
 

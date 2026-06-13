@@ -102,6 +102,19 @@ function formatPopularity(value: number | null): string {
   return value ? `${value}人気` : "-";
 }
 
+function formatSexAge(sex: string | null, age: number | null): string {
+  const s = sex ?? "";
+  const a = age != null ? String(age) : "";
+  return s || a ? `${s}${a}` : "-";
+}
+
+function formatHorseWeight(weight: number | null, diff: number | null): string {
+  if (weight == null) return "-";
+  if (diff == null) return String(weight);
+  const sign = diff > 0 ? `+${diff}` : String(diff);
+  return `${weight}(${sign})`;
+}
+
 function ScoreBar({ score }: { score: number | null }) {
   if (score === null) return <span className="muted">-</span>;
   return (
@@ -168,8 +181,11 @@ function RaceDetailView({ raceId }: { raceId: number }) {
             <SortHeader label="AI順位" sortKey="ai_rank" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="馬番" sortKey="horse_number" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="馬名" sortKey="horse_name" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <th>性齢</th>
             <SortHeader label="騎手" sortKey="jockey" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <th>厩舎</th>
             <SortHeader label="斤量" sortKey="weight" defaultDir="desc" sort={sort} onSort={handleSort} />
+            <th>馬体重</th>
             <SortHeader label="オッズ" sortKey="odds" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="人気" sortKey="popularity" defaultDir="asc" sort={sort} onSort={handleSort} />
             <SortHeader label="AI勝率" sortKey="score" defaultDir="desc" sort={sort} onSort={handleSort} />
@@ -199,8 +215,11 @@ function RaceDetailView({ raceId }: { raceId: number }) {
                   e.horse_name
                 )}
               </td>
+              <td>{formatSexAge(e.sex, e.age)}</td>
               <td>{e.jockey || "-"}</td>
+              <td>{e.trainer || "-"}</td>
               <td>{e.weight ?? "-"}</td>
+              <td>{formatHorseWeight(e.horse_weight, e.horse_weight_diff)}</td>
               <td>{e.odds ?? "-"}</td>
               <td>{formatPopularity(e.popularity)}</td>
               <td>

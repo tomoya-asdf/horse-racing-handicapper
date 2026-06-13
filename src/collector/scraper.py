@@ -87,9 +87,15 @@ _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})\s*発走")
 _WEIGHT_RE = re.compile(r"^\d{2}\.\d$")
 # 騎手ページのリンク(/jockey/result/recent/05339/ や /jockey/05339/)から騎手ID(数字)を取り出す
 _JOCKEY_ID_RE = re.compile(r"/jockey/(?:result/recent/)?(\d+)")
+# 調教師ページのリンク(/trainer/result/recent/01123/ や /trainer/01123/)から調教師IDを取り出す
+_TRAINER_ID_RE = re.compile(r"/trainer/(?:result/recent/)?(\w+)")
 # 馬ページのリンク(/horse/2019104567/)から馬IDを取り出す
 _HORSE_ID_RE = re.compile(r"/horse/(\w+)")
 _ODDS_RE = re.compile(r"^\d{1,4}\.\d$")
+# 性齢("牡3"/"牝4"/"セ5")。騙馬は環境により"せ"表記もあるため両方拾う
+_SEX_AGE_RE = re.compile(r"([牡牝セせ])\s*(\d+)")
+# 馬体重("456(-12)"/"428(+4)"/"500(0)")。括弧内が前走比増減
+_HORSE_WEIGHT_RE = re.compile(r"(\d{2,3})\s*\(\s*([+-]?\d+)\s*\)")
 
 
 def _parse_jockey_id(href: str | None) -> str | None:
@@ -97,6 +103,38 @@ def _parse_jockey_id(href: str | None) -> str | None:
         return None
     match = _JOCKEY_ID_RE.search(href)
     return match.group(1) if match else None
+
+
+def _parse_trainer_id(href: str | None) -> str | None:
+    if not href:
+        return None
+    match = _TRAINER_ID_RE.search(href)
+    return match.group(1) if match else None
+
+
+def _parse_sex_age(text: str) -> tuple[str | None, int | None]:
+    """性齢セル('牡3')を性別と馬齢に分解する。取れない場合は (None, None)。"""
+    match = _SEX_AGE_RE.search(text or "")
+    if not match:
+        return None, None
+    sex = "セ" if match.group(1) == "せ" else match.group(1)
+    return sex, int(match.group(2))
+
+
+def _parse_horse_weight(text: str) -> tuple[int | None, int | None]:
+    """馬体重セル('456(-12)')を体重と増減に分解する。
+
+    括弧付き('456(-12)')は (456, -12)、増減のみ無い初出走('456')は (456, None)、
+    '計不'等の未計量は (None, None)。
+    """
+    text = (text or "").strip()
+    match = _HORSE_WEIGHT_RE.search(text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    only_weight = re.fullmatch(r"(\d{2,3})", text)
+    if only_weight:
+        return int(only_weight.group(1)), None
+    return None, None
 
 
 def _parse_horse_id(href: str | None) -> str | None:
@@ -363,15 +401,49 @@ def _parse_entry_rows(soup: BeautifulSoup) -> list[dict]:
             continue
         seen_horse_numbers.add(horse_number)
 
+        # 性齢・厩舎(調教師)・馬体重はnetkeibaのクラス名(Barei/Trainer/Weight)で特定する
+        barei_cell = row.find("td", class_="Barei")
+        sex, age = _parse_sex_age(barei_cell.get_text(strip=True)) if barei_cell else (None, None)
+        if sex is None:
+            # 除外・取消馬は性齢セルにクラスが付かないことがあるため、性齢書式のセルを探す
+            for cell in row.find_all("td"):
+                text = cell.get_text(strip=True)
+                if re.fullmatch(r"[牡牝セせ]\s*\d{1,2}", text):
+                    sex, age = _parse_sex_age(text)
+                    break
+
+        trainer_cell = row.find("td", class_="Trainer")
+        trainer_link = (
+            trainer_cell.find("a", href=re.compile(r"/trainer/")) if trainer_cell else None
+        )
+        # 厩舎名はリンクテキスト(調教師名)を優先し、無ければセル全文(トレセン区分+名)
+        trainer = (
+            trainer_link.get_text(strip=True)
+            if trainer_link
+            else (trainer_cell.get_text(strip=True) if trainer_cell else "")
+        )
+        trainer_id = _parse_trainer_id(trainer_link.get("href")) if trainer_link else None
+
+        weight_cell = row.find("td", class_="Weight")
+        horse_weight, horse_weight_diff = (
+            _parse_horse_weight(weight_cell.get_text(strip=True)) if weight_cell else (None, None)
+        )
+
         odds, popularity = _parse_row_odds(row)
         entries.append(
             {
                 "horse_number": horse_number,
                 "horse_id": _parse_horse_id(horse_link.get("href")),
                 "horse_name": horse_link.get_text(strip=True),
+                "sex": sex,
+                "age": age,
                 "jockey": jockey_link.get_text(strip=True) if jockey_link else "",
                 "jockey_id": _parse_jockey_id(jockey_link.get("href") if jockey_link else None),
+                "trainer": trainer or None,
+                "trainer_id": trainer_id,
                 "weight": weight,
+                "horse_weight": horse_weight,
+                "horse_weight_diff": horse_weight_diff,
                 "odds": odds,
                 "popularity": popularity,
             }

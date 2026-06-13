@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date
 
 import numpy as np
@@ -36,6 +37,20 @@ HISTORY_FEATURES = [
     "same_surface_starts",  # 同馬場種別(芝/ダ)の出走数
     "same_surface_avg_finish",  # 同馬場種別の平均着順
 ]
+
+
+def season_features(race_date: date | None) -> tuple[float, float]:
+    """開催日を年内の周期(1年=2π)に写像した sin / cos を返す。
+
+    距離・馬場と違い「季節」は連続かつ周期的(12月と1月が近い)なので、月番号を
+    そのまま数値にすると年末年始で不連続になる。sin/cos の2成分にすることで
+    周期性を保ったままモデルへ季節変動を渡せる。取得不能時は (NaN, NaN)。
+    """
+    if race_date is None:
+        return float("nan"), float("nan")
+    day_of_year = race_date.timetuple().tm_yday
+    angle = 2 * math.pi * day_of_year / 365.25
+    return math.sin(angle), math.cos(angle)
 
 
 def load_horse_history(session) -> dict[str, pd.DataFrame]:
@@ -152,6 +167,8 @@ def build_entries_frame(
     学習・予測の双方がこの関数を通すことで、同一の特徴量定義を保証する。
     """
     sire_map = sire_map or {}
+    # 季節(sin/cos)はレース単位で同じ値。出走馬ごとに再計算せず一度だけ求める
+    season_sin, season_cos = season_features(race.race_date)
     rows = []
     index = []
     for entry in entries:
@@ -164,10 +181,17 @@ def build_entries_frame(
         rows.append(
             {
                 "horse_number": entry.horse_number,
+                "sex": entry.sex,
+                "age": entry.age,
                 "weight": entry.weight,
+                "horse_weight": entry.horse_weight,
+                "horse_weight_diff": entry.horse_weight_diff,
                 "jockey_id": entry.jockey_id,
+                "trainer_id": entry.trainer_id,
                 "sire_id": sire_map.get(entry.horse_id) if entry.horse_id else None,
                 "distance": race.distance,
+                "season_sin": season_sin,
+                "season_cos": season_cos,
                 **feats,
             }
         )

@@ -73,9 +73,15 @@ class Entry(Base):
     horse_number = Column(Integer, nullable=False)
     horse_id = Column(String, index=True)  # netkeibaの馬ID(過去成績 horse_results との紐付けに使う)
     horse_name = Column(String, nullable=False)
+    sex = Column(String)  # 性別(牡/牝/セ)。出馬表の「性齢」から取得
+    age = Column(Integer)  # 馬齢。出馬表の「性齢」から取得
     jockey = Column(String)
     jockey_id = Column(String)  # netkeibaの騎手ID(騎手名は同姓同名がありうるため学習にはIDを使う)
-    weight = Column(Float)
+    trainer = Column(String)  # 調教師名(厩舎)
+    trainer_id = Column(String)  # netkeibaの調教師ID(同姓同名対策。学習にはIDを使う)
+    weight = Column(Float)  # 斤量(kg)
+    horse_weight = Column(Integer)  # 馬体重(kg)。当日計量のため発走前日まではNoneのことが多い
+    horse_weight_diff = Column(Integer)  # 前走からの馬体重増減(kg)
     odds = Column(Float)  # 発走前は予想オッズ、発走後は最終オッズ(収集の度に上書き)
     popularity = Column(Integer)  # 人気順位(発走前は予想人気)。netkeibaから取得、無ければオッズ昇順で導出
     finish_position = Column(Integer)

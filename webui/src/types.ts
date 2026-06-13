@@ -141,8 +141,13 @@ export interface RaceEntry {
   horse_number: number;
   horse_id: string | null;
   horse_name: string;
+  sex: string | null;
+  age: number | null;
   jockey: string | null;
+  trainer: string | null;
   weight: number | null;
+  horse_weight: number | null;
+  horse_weight_diff: number | null;
   odds: number | null;
   popularity: number | null;
   finish_position: number | null;
