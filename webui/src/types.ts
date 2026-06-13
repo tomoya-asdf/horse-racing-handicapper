@@ -66,6 +66,7 @@ export interface Overview {
 
 export interface TopPrediction {
   horse_number: number | null;
+  horse_id: string | null;
   horse_name: string | null;
   score: number;
   model_version: string;
@@ -79,6 +80,10 @@ export interface RaceSummary {
   race_number: number;
   race_name: string | null;
   start_time: string | null;
+  distance: number | null;
+  track_type: string | null;
+  going: string | null;
+  race_class: string | null;
   entry_count: number;
   finished: boolean;
   top_prediction: TopPrediction | null;
@@ -96,10 +101,12 @@ export interface RacesResponse {
 export interface RaceEntry {
   id: number;
   horse_number: number;
+  horse_id: string | null;
   horse_name: string;
   jockey: string | null;
   weight: number | null;
   odds: number | null;
+  popularity: number | null;
   finish_position: number | null;
   score: number | null;
   ai_rank: number | null;
@@ -113,6 +120,7 @@ export interface RaceEntry {
 export interface RaceAiPick {
   entry_id: number;
   horse_number: number;
+  horse_id: string | null;
   horse_name: string;
   score: number;
   ai_rank: number | null;
@@ -129,6 +137,12 @@ export interface RaceDetail {
   race_number: number;
   race_name: string | null;
   start_time: string | null;
+  distance: number | null;
+  track_type: string | null;
+  direction: string | null;
+  going: string | null;
+  weather: string | null;
+  race_class: string | null;
   model_version: string | null;
   analysis: {
     top_ai: RaceAiPick[];
@@ -145,11 +159,41 @@ export interface RaceBet {
   status: string;
   bet_type: string;
   horse_number: number | null;
+  combination: string | null;
   amount: number;
   odds_at_bet: number | null;
   payout: number | null;
   is_settled: boolean;
   placed_at: string | null;
+}
+
+export interface HorseResult {
+  race_key: string | null;
+  race_date: string | null;
+  venue: string | null;
+  race_name: string | null;
+  field_size: number | null;
+  horse_number: number | null;
+  odds: number | null;
+  popularity: number | null;
+  finish_position: number | null;
+  jockey: string | null;
+  weight: number | null;
+  distance: number | null;
+  track_type: string | null;
+  going: string | null;
+  time_seconds: number | null;
+  last_3f: number | null;
+  horse_weight: number | null;
+}
+
+export interface HorseDetail {
+  horse_id: string;
+  name: string | null;
+  sire_id: string | null;
+  sire_name: string | null;
+  results_fetched_at: string | null;
+  results: HorseResult[];
 }
 
 export interface BetItem {
@@ -161,6 +205,7 @@ export interface BetItem {
   race_name: string | null;
   horse_number: number | null;
   horse_name: string | null;
+  combination: string | null;
   bet_type: string;
   status: string;
   amount: number;

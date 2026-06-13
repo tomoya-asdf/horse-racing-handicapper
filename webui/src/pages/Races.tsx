@@ -1,9 +1,93 @@
 import { Fragment, useState } from "react";
-import { getJSON, formatDateTime } from "../api";
+import { getJSON, formatDate, formatFullDateTime } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
-import type { RaceDetail, RacesResponse } from "../types";
+import type { HorseDetail, RaceDetail, RaceEntry, RacesResponse } from "../types";
 
 const PAGE_SIZE = 50;
+
+// 出走馬テーブルの並び替え対象列。rank系(順位・人気・着順)は昇順、
+// 値系(斤量・オッズ・勝率・期待値)は降順を初期方向にする。
+type SortKey =
+  | "ai_rank"
+  | "horse_number"
+  | "horse_name"
+  | "jockey"
+  | "weight"
+  | "odds"
+  | "popularity"
+  | "score"
+  | "expected_value"
+  | "finish_position";
+
+interface SortState {
+  key: SortKey;
+  dir: "asc" | "desc";
+}
+
+function sortEntries(entries: RaceEntry[], sort: SortState): RaceEntry[] {
+  const sorted = [...entries];
+  sorted.sort((a, b) => {
+    const av = a[sort.key];
+    const bv = b[sort.key];
+    const aEmpty = av === null || av === undefined;
+    const bEmpty = bv === null || bv === undefined;
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1; // 値なしは方向に関わらず末尾へ
+    if (bEmpty) return -1;
+    let cmp: number;
+    if (typeof av === "string" || typeof bv === "string") {
+      cmp = String(av).localeCompare(String(bv), "ja");
+    } else {
+      cmp = (av as number) - (bv as number);
+    }
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  return sorted;
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  defaultDir,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  defaultDir: "asc" | "desc";
+  sort: SortState;
+  onSort: (key: SortKey, defaultDir: "asc" | "desc") => void;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th className={`sortable${active ? " sorted" : ""}`} onClick={() => onSort(sortKey, defaultDir)}>
+      {label}
+      <span className="sort-arrow">{active ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+    </th>
+  );
+}
+
+function formatCourse(track: string | null, distance: number | null): string {
+  const course = `${track ?? ""}${distance ? `${distance}m` : ""}`;
+  return course || "-";
+}
+
+function formatConditions(d: {
+  track_type: string | null;
+  distance: number | null;
+  direction: string | null;
+  going: string | null;
+  weather: string | null;
+  race_class: string | null;
+}): string {
+  const parts: string[] = [];
+  const course = `${d.track_type ?? ""}${d.distance ? `${d.distance}m` : ""}`;
+  if (course) parts.push(d.direction ? `${course} (${d.direction})` : course);
+  if (d.race_class) parts.push(d.race_class);
+  if (d.going) parts.push(`馬場:${d.going}`);
+  if (d.weather) parts.push(`天候:${d.weather}`);
+  return parts.join(" / ");
+}
 
 function formatPercent(value: number | null): string {
   if (value === null) return "-";
@@ -13,6 +97,13 @@ function formatPercent(value: number | null): string {
 function formatExpectedValue(value: number | null): string {
   if (value === null) return "-";
   return value.toFixed(2);
+}
+
+function formatTimeSeconds(value: number | null): string {
+  if (value === null) return "-";
+  const minutes = Math.floor(value / 60);
+  const seconds = value - minutes * 60;
+  return minutes > 0 ? `${minutes}:${seconds.toFixed(1).padStart(4, "0")}` : seconds.toFixed(1);
 }
 
 function ScoreBar({ score }: { score: number | null }) {
@@ -31,18 +122,93 @@ function ValueBadge({ label }: { label: string | null }) {
   return <span className={className}>{label}</span>;
 }
 
-function RaceDetailView({ raceId }: { raceId: number }) {
-  const { data, error } = usePolling<RaceDetail>(
-    () => getJSON(`/api/races/${raceId}`),
-    30000,
-    [raceId]
+function HorseDetailPanel({ horseId }: { horseId: string }) {
+  const { data, error } = usePolling<HorseDetail>(
+    () => getJSON(`/api/horses/${horseId}`),
+    60000,
+    [horseId]
   );
 
   if (error) return <ErrorNote message={error} />;
   if (!data) return <div className="loading">読み込み中...</div>;
 
   return (
+    <div className="horse-detail-panel">
+      <div className="horse-detail-header">
+        <strong>{data.name ?? horseId}</strong>
+        <span className="muted">馬ID: {data.horse_id}</span>
+        <span>父: {data.sire_name ?? "-"}</span>
+        <span className="muted">取得: {formatFullDateTime(data.results_fetched_at)}</span>
+      </div>
+      {data.results.length === 0 ? (
+        <p className="muted">
+          過去戦績はまだ収集されていません。ジョブの「馬過去成績収集」を実行すると表示されます。
+        </p>
+      ) : (
+        <table className="table horse-results-table">
+          <thead>
+            <tr>
+              <th>日付</th>
+              <th>開催</th>
+              <th>レース</th>
+              <th>距離</th>
+              <th>着順</th>
+              <th>人気</th>
+              <th>オッズ</th>
+              <th>騎手</th>
+              <th>斤量</th>
+              <th>タイム</th>
+              <th>上り</th>
+              <th>馬体重</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.results.map((result, index) => (
+              <tr key={`${result.race_key ?? "race"}-${index}`}>
+                <td>{formatDate(result.race_date)}</td>
+                <td>{result.venue ?? "-"}</td>
+                <td>{result.race_name ?? "-"}</td>
+                <td>{formatCourse(result.track_type, result.distance)}</td>
+                <td>{result.finish_position ?? "-"}</td>
+                <td>{result.popularity ? `${result.popularity}人気` : "-"}</td>
+                <td>{result.odds ?? "-"}</td>
+                <td>{result.jockey ?? "-"}</td>
+                <td>{result.weight ?? "-"}</td>
+                <td>{formatTimeSeconds(result.time_seconds)}</td>
+                <td>{result.last_3f ?? "-"}</td>
+                <td>{result.horse_weight ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function RaceDetailView({ raceId }: { raceId: number }) {
+  const { data, error } = usePolling<RaceDetail>(
+    () => getJSON(`/api/races/${raceId}`),
+    30000,
+    [raceId]
+  );
+  const [sort, setSort] = useState<SortState>({ key: "ai_rank", dir: "asc" });
+  const handleSort = (key: SortKey, defaultDir: "asc" | "desc") => {
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: defaultDir }
+    );
+  };
+
+  if (error) return <ErrorNote message={error} />;
+  if (!data) return <div className="loading">読み込み中...</div>;
+
+  const sortedEntries = sortEntries(data.entries, sort);
+
+  return (
     <div className="race-detail">
+      {formatConditions(data) && <p className="race-conditions">{formatConditions(data)}</p>}
       {data.model_version && <p className="muted">予測モデル: {data.model_version}</p>}
       {data.analysis.top_ai.length > 0 && (
         <div className="race-ai-summary">
@@ -67,31 +233,44 @@ function RaceDetailView({ raceId }: { raceId: number }) {
       <table className="table">
         <thead>
           <tr>
-            <th>AI順位</th>
-            <th>馬番</th>
-            <th>馬名</th>
-            <th>騎手</th>
-            <th>斤量</th>
-            <th>オッズ</th>
-            <th>人気</th>
-            <th>AI勝率</th>
-            <th>期待値</th>
+            <SortHeader label="AI順位" sortKey="ai_rank" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="馬番" sortKey="horse_number" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="馬名" sortKey="horse_name" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="騎手" sortKey="jockey" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="斤量" sortKey="weight" defaultDir="desc" sort={sort} onSort={handleSort} />
+            <SortHeader label="オッズ" sortKey="odds" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="人気" sortKey="popularity" defaultDir="asc" sort={sort} onSort={handleSort} />
+            <SortHeader label="AI勝率" sortKey="score" defaultDir="desc" sort={sort} onSort={handleSort} />
+            <SortHeader label="期待値" sortKey="expected_value" defaultDir="desc" sort={sort} onSort={handleSort} />
             <th>判定</th>
             <th>評価</th>
-            <th>着順</th>
+            <SortHeader label="着順" sortKey="finish_position" defaultDir="asc" sort={sort} onSort={handleSort} />
             <th>賭け</th>
           </tr>
         </thead>
         <tbody>
-          {data.entries.map((e) => (
+          {sortedEntries.map((e) => (
             <tr key={e.id} className={e.has_bet ? "row-bet" : ""}>
               <td>{e.ai_rank ? `${e.ai_rank}位` : "-"}</td>
               <td>{e.horse_number}</td>
-              <td>{e.horse_name}</td>
+              <td>
+                {e.horse_id ? (
+                  <a
+                    className="link-button"
+                    href={`/horses/${encodeURIComponent(e.horse_id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {e.horse_name}
+                  </a>
+                ) : (
+                  e.horse_name
+                )}
+              </td>
               <td>{e.jockey || "-"}</td>
               <td>{e.weight ?? "-"}</td>
               <td>{e.odds ?? "-"}</td>
-              <td>{e.odds_rank ? `${e.odds_rank}人気` : "-"}</td>
+              <td>{e.popularity ? `${e.popularity}人気` : "-"}</td>
               <td>
                 <ScoreBar score={e.score} />
               </td>
@@ -113,7 +292,8 @@ function RaceDetailView({ raceId }: { raceId: number }) {
               <ModeBadge mode={b.mode} />
               <StatusBadge status={b.status} />
               <span>
-                {b.bet_type} {b.horse_number}番 / {b.amount.toLocaleString()}円
+                {b.bet_type} {b.combination ? b.combination : `${b.horse_number}番`} /{" "}
+                {b.amount.toLocaleString()}円
                 {b.is_settled && ` → 払戻 ${Math.round(b.payout ?? 0).toLocaleString()}円`}
               </span>
             </div>
@@ -129,6 +309,7 @@ export default function RacesPage() {
   const [filters, setFilters] = useState({
     race_name: "",
     race_date: "",
+    race_number: "",
     venue: "",
     status: "",
     horse_name: "",
@@ -157,6 +338,7 @@ export default function RacesPage() {
   const end = data ? Math.min(data.offset + rowCount, total) : 0;
   const canGoPrev = page > 0;
   const canGoNext = data ? data.offset + rowCount < total : false;
+  const lastPage = total > 0 ? Math.floor((total - 1) / PAGE_SIZE) : 0;
   const changePage = (nextPage: number) => {
     setOpenId(null);
     setPage(nextPage);
@@ -172,6 +354,7 @@ export default function RacesPage() {
     setFilters({
       race_name: "",
       race_date: "",
+      race_number: "",
       venue: "",
       status: "",
       horse_name: "",
@@ -185,18 +368,26 @@ export default function RacesPage() {
   if (!data) return <div className="loading">読み込み中...</div>;
 
   return (
-    <div>
+    <div className="races-page">
       <div className="pagination-bar">
         <span className="muted">
           {total.toLocaleString()}件中 {start.toLocaleString()}-{end.toLocaleString()}件を表示
         </span>
         <div className="pagination-actions">
+          <button disabled={!canGoPrev} onClick={() => changePage(0)}>
+            最初のページ
+          </button>
           <button disabled={!canGoPrev} onClick={() => changePage(page - 1)}>
             前のページ
           </button>
-          <span>{page + 1}ページ目</span>
+          <span>
+            {page + 1} / {lastPage + 1}ページ
+          </span>
           <button disabled={!canGoNext} onClick={() => changePage(page + 1)}>
             次のページ
+          </button>
+          <button disabled={!canGoNext} onClick={() => changePage(lastPage)}>
+            最終ページ
           </button>
         </div>
       </div>
@@ -217,6 +408,20 @@ export default function RacesPage() {
             value={filters.race_date}
             onChange={(e) => updateFilter("race_date", e.target.value)}
           />
+        </label>
+        <label>
+          <span>R</span>
+          <select
+            value={filters.race_number}
+            onChange={(e) => updateFilter("race_number", e.target.value)}
+          >
+            <option value="">すべて</option>
+            {Array.from({ length: 12 }, (_, index) => index + 1).map((raceNumber) => (
+              <option key={raceNumber} value={raceNumber}>
+                {raceNumber}R
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           <span>競馬場</span>
@@ -283,6 +488,7 @@ export default function RacesPage() {
             <th>日付</th>
             <th>競馬場</th>
             <th>R</th>
+            <th>コース</th>
             <th>レース名</th>
             <th>発走</th>
             <th>頭数</th>
@@ -298,11 +504,12 @@ export default function RacesPage() {
                 className="row-clickable"
                 onClick={() => setOpenId(openId === race.id ? null : race.id)}
               >
-                <td>{race.race_date?.slice(5) ?? "-"}</td>
+                <td>{formatDate(race.race_date)}</td>
                 <td>{race.venue}</td>
                 <td>{race.race_number}</td>
+                <td>{formatCourse(race.track_type, race.distance)}</td>
                 <td>{race.race_name || "-"}</td>
-                <td>{formatDateTime(race.start_time)}</td>
+                <td>{formatFullDateTime(race.start_time)}</td>
                 <td>{race.entry_count}</td>
                 <td>{race.finished ? "確定" : "未確定"}</td>
                 <td>
@@ -314,7 +521,7 @@ export default function RacesPage() {
               </tr>
               {openId === race.id && (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <RaceDetailView raceId={race.id} />
                   </td>
                 </tr>

@@ -21,7 +21,17 @@ from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import get_settings_view, load_betting_config, save_settings
-from src.common.models import Bet, BetStatus, BettingMode, Entry, JobRun, Prediction, Race
+from src.common.models import (
+    Bet,
+    BetStatus,
+    BettingMode,
+    Entry,
+    Horse,
+    HorseResult,
+    JobRun,
+    Prediction,
+    Race,
+)
 from src.common.timeutils import now_jst
 from src.predictor.model import MODEL_PATH
 
@@ -33,10 +43,12 @@ app = FastAPI(title="競馬予測AI 管理API")
 JOB_LABELS = {
     jobs.COLLECT: "データ収集",
     jobs.BACKFILL: "過去データ取得",
+    jobs.COLLECT_HORSES: "馬過去成績収集",
     jobs.PREDICT: "AI予想",
     jobs.BET_DECIDE: "賭け対象決定",
     jobs.SETTLE: "決済",
     jobs.TRAIN: "モデル学習",
+    jobs.BACKTEST: "回収率バックテスト",
 }
 
 # 一度にバックフィルできる最大日数(netkeibaへの負荷を抑えるため)
@@ -229,6 +241,7 @@ def list_races(
     offset: int = 0,
     race_name: str | None = None,
     race_date: str | None = None,
+    race_number: int | None = None,
     venue: str | None = None,
     status: str | None = None,
     horse_name: str | None = None,
@@ -257,6 +270,10 @@ def list_races(
             except ValueError:
                 raise HTTPException(status_code=400, detail="race_date は YYYY-MM-DD で指定してください")
             query = query.filter(Race.race_date == parsed_date)
+        if race_number is not None:
+            if race_number < 1 or race_number > 12:
+                raise HTTPException(status_code=400, detail="race_number は 1-12 で指定してください")
+            query = query.filter(Race.race_number == race_number)
         if venue:
             query = query.filter(Race.venue == venue.strip())
         if status == "finished":
@@ -309,6 +326,7 @@ def list_races(
                 best_entry = entry_map.get(best.entry_id)
                 top = {
                     "horse_number": best_entry.horse_number if best_entry else None,
+                    "horse_id": best_entry.horse_id if best_entry else None,
                     "horse_name": best_entry.horse_name if best_entry else None,
                     "score": best.score,
                     "model_version": best.model_version,
@@ -322,6 +340,10 @@ def list_races(
                     "race_number": race.race_number,
                     "race_name": race.race_name,
                     "start_time": _iso(race.start_time),
+                    "distance": race.distance,
+                    "track_type": race.track_type,
+                    "going": race.going,
+                    "race_class": race.race_class,
                     "entry_count": len(race.entries),
                     "finished": any(e.finish_position is not None for e in race.entries),
                     "top_prediction": top,
@@ -393,6 +415,7 @@ def race_detail(race_id: int) -> dict:
             {
                 "entry_id": e.id,
                 "horse_number": e.horse_number,
+                "horse_id": e.horse_id,
                 "horse_name": e.horse_name,
                 "score": score_map[e.id],
                 "ai_rank": ai_rank_map.get(e.id),
@@ -409,10 +432,12 @@ def race_detail(race_id: int) -> dict:
             {
                 "id": e.id,
                 "horse_number": e.horse_number,
+                "horse_id": e.horse_id,
                 "horse_name": e.horse_name,
                 "jockey": e.jockey,
                 "weight": e.weight,
                 "odds": e.odds,
+                "popularity": e.popularity if e.popularity is not None else odds_rank_map.get(e.id),
                 "finish_position": e.finish_position,
                 "score": score_map.get(e.id),
                 "ai_rank": ai_rank_map.get(e.id),
@@ -450,6 +475,7 @@ def race_detail(race_id: int) -> dict:
                 "status": b.status,
                 "bet_type": b.bet_type,
                 "horse_number": b.entry.horse_number if b.entry else None,
+                "combination": b.combination,
                 "amount": b.amount,
                 "odds_at_bet": b.odds_at_bet,
                 "payout": b.payout,
@@ -466,6 +492,12 @@ def race_detail(race_id: int) -> dict:
             "race_number": race.race_number,
             "race_name": race.race_name,
             "start_time": _iso(race.start_time),
+            "distance": race.distance,
+            "track_type": race.track_type,
+            "direction": race.direction,
+            "going": race.going,
+            "weather": race.weather,
+            "race_class": race.race_class,
             "model_version": model_version,
             "analysis": {
                 "top_ai": top_ai,
@@ -474,6 +506,65 @@ def race_detail(race_id: int) -> dict:
             },
             "entries": entries,
             "bets": bets,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/horses/{horse_id}")
+def horse_detail(horse_id: str) -> dict:
+    session = get_session()
+    try:
+        horse = session.get(Horse, horse_id)
+        results = (
+            session.query(HorseResult)
+            .filter(HorseResult.horse_id == horse_id)
+            .order_by(HorseResult.race_date.desc().nullslast(), HorseResult.id.desc())
+            .limit(30)
+            .all()
+        )
+        if horse is None and not results:
+            entry = session.query(Entry).filter(Entry.horse_id == horse_id).first()
+            if entry is None:
+                raise HTTPException(status_code=404, detail="horse not found")
+            name = entry.horse_name
+            sire_id = None
+            sire_name = None
+            results_fetched_at = None
+        else:
+            name = horse.name if horse else None
+            sire_id = horse.sire_id if horse else None
+            sire_name = horse.sire_name if horse else None
+            results_fetched_at = _iso(horse.results_fetched_at) if horse else None
+
+        return {
+            "horse_id": horse_id,
+            "name": name,
+            "sire_id": sire_id,
+            "sire_name": sire_name,
+            "results_fetched_at": results_fetched_at,
+            "results": [
+                {
+                    "race_key": r.race_key,
+                    "race_date": r.race_date.isoformat() if r.race_date else None,
+                    "venue": r.venue,
+                    "race_name": r.race_name,
+                    "field_size": r.field_size,
+                    "horse_number": r.horse_number,
+                    "odds": r.odds,
+                    "popularity": r.popularity,
+                    "finish_position": r.finish_position,
+                    "jockey": r.jockey,
+                    "weight": r.weight,
+                    "distance": r.distance,
+                    "track_type": r.track_type,
+                    "going": r.going,
+                    "time_seconds": r.time_seconds,
+                    "last_3f": r.last_3f,
+                    "horse_weight": r.horse_weight,
+                }
+                for r in results
+            ],
         }
     finally:
         session.close()
@@ -506,6 +597,7 @@ def list_bets(mode: str = BettingMode.SIM.value) -> dict:
                     "race_name": b.race.race_name if b.race else None,
                     "horse_number": b.entry.horse_number if b.entry else None,
                     "horse_name": b.entry.horse_name if b.entry else None,
+                    "combination": b.combination,
                     "bet_type": b.bet_type,
                     "status": b.status,
                     "amount": b.amount,
@@ -580,6 +672,21 @@ def _validate_backfill_params(body: dict) -> dict:
     return {"start_date": start.isoformat(), "end_date": end.isoformat()}
 
 
+def _validate_backtest_params(body: dict) -> dict:
+    try:
+        start = datetime.strptime(str(body.get("start_date", "")), "%Y-%m-%d").date()
+        end = datetime.strptime(str(body.get("end_date", "")), "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="start_date / end_date をYYYY-MM-DDで指定してください"
+        )
+    if start > end:
+        raise HTTPException(status_code=400, detail="開始日は終了日以前を指定してください")
+    if start > now_jst().date():
+        raise HTTPException(status_code=400, detail="開始日は未来日を指定できません")
+    return {"start_date": start.isoformat(), "end_date": end.isoformat()}
+
+
 @app.post("/api/jobs/{job_name}/run", dependencies=[Depends(require_admin)])
 def trigger_job(job_name: str, body: dict | None = None) -> dict:
     if job_name not in jobs.ALL_JOBS:
@@ -587,6 +694,8 @@ def trigger_job(job_name: str, body: dict | None = None) -> dict:
     params = None
     if job_name == jobs.BACKFILL:
         params = _validate_backfill_params(body or {})
+    elif job_name == jobs.BACKTEST:
+        params = _validate_backtest_params(body or {})
     result = jobs.enqueue(job_name, params)
     return {**result, "job_name": job_name, "label": JOB_LABELS[job_name]}
 
@@ -610,6 +719,10 @@ if WEBUI_DIST.exists():
 
     @app.get("/")
     def index() -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
+    @app.get("/horses/{horse_id}")
+    def horse_page(horse_id: str) -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
 
     app.mount("/", StaticFiles(directory=WEBUI_DIST, html=True), name="webui")

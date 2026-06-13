@@ -146,7 +146,7 @@ export default function BetsPage() {
                     {b.race_date?.slice(5)} {b.venue} {b.race_number}R
                   </td>
                   <td>
-                    {b.horse_number}番 {b.horse_name ?? ""}
+                    {b.combination ? b.combination : `${b.horse_number}番 ${b.horse_name ?? ""}`}
                   </td>
                   <td>{b.bet_type}</td>
                   <td>

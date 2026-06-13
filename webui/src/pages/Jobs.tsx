@@ -5,6 +5,11 @@ import type { JobRun } from "../types";
 
 const JOB_BUTTONS = [
   { name: "collect", label: "データ収集", description: "netkeibaからレース・オッズ・結果を取得" },
+  {
+    name: "collect_horses",
+    label: "馬過去成績収集",
+    description: "出走馬の過去成績(horse_results)を未取得分から収集",
+  },
   { name: "predict", label: "AI予想", description: "未確定レースにオッズ不要の予測スコアを作成" },
   { name: "bet_decide", label: "賭け対象決定", description: "予測とオッズから賭け対象を決定" },
   { name: "settle", label: "決済", description: "確定したレースの払戻を反映" },
@@ -23,6 +28,8 @@ export default function JobsPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [backfillStart, setBackfillStart] = useState(isoDaysAgo(14));
   const [backfillEnd, setBackfillEnd] = useState(isoDaysAgo(1));
+  const [backtestStart, setBacktestStart] = useState(isoDaysAgo(365));
+  const [backtestEnd, setBacktestEnd] = useState(isoDaysAgo(1));
 
   const runJob = async (name: string, label: string, body?: unknown) => {
     setMessage(null);
@@ -92,6 +99,38 @@ export default function JobsPage() {
           }
         >
           取得を開始
+        </button>
+      </div>
+
+      <h2>回収率バックテスト</h2>
+      <p className="muted">
+        指定期間の確定レースで、開始日より前のデータだけで学習したモデルを使って予測・賭け・決済を
+        シミュレートし、的中率・回収率を算出します(現在の賭け設定＋期待値下限のスイープ)。
+        結果は下の実行履歴の「結果」欄に表示されます。
+      </p>
+      <div className="backfill-form">
+        <label>
+          <span>開始日</span>
+          <input
+            type="date"
+            value={backtestStart}
+            onChange={(e) => setBacktestStart(e.target.value)}
+          />
+        </label>
+        <label>
+          <span>終了日</span>
+          <input type="date" value={backtestEnd} onChange={(e) => setBacktestEnd(e.target.value)} />
+        </label>
+        <button
+          className="primary"
+          onClick={() =>
+            confirmAndRunJob("backtest", "回収率バックテスト", {
+              start_date: backtestStart,
+              end_date: backtestEnd,
+            })
+          }
+        >
+          バックテストを実行
         </button>
       </div>
 

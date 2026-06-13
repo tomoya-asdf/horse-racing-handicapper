@@ -201,6 +201,36 @@ h2 {
   border-bottom: none;
 }
 
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.table th.sortable:hover {
+  color: var(--text);
+}
+
+.table th.sortable.sorted {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.race-conditions {
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.sort-arrow {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.table th.sortable.sorted .sort-arrow {
+  opacity: 1;
+}
+
 .table-narrow {
   max-width: 560px;
 }
@@ -217,11 +247,25 @@ h2 {
   background: rgba(79, 156, 249, 0.08);
 }
 
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .detail-cell {
-  max-width: 420px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 520px;
+  /* バックテスト結果など複数行の detail を改行を保って表示する */
+  white-space: pre-line;
+  word-break: break-word;
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -477,6 +521,27 @@ h2 {
   gap: 6px;
 }
 
+.horse-detail-panel {
+  margin-top: 12px;
+  min-width: 1080px;
+  background: rgba(15, 20, 25, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.horse-detail-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.horse-results-table {
+  font-size: 12px;
+}
+
 .race-bet-row {
   display: flex;
   align-items: center;
@@ -599,6 +664,68 @@ h2 {
   border-radius: 10px;
   padding: 14px;
   margin-bottom: 14px;
+}
+
+.races-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.races-page > h2 {
+  order: 1;
+}
+
+.races-page > .race-filters {
+  order: 2;
+}
+
+.races-page > .table {
+  order: 3;
+}
+
+.races-page > .pagination-bar {
+  order: 4;
+  margin: 12px 0 0;
+}
+
+.race-filters > label:nth-of-type(1) {
+  order: 4;
+}
+
+.race-filters > label:nth-of-type(2) {
+  order: 1;
+}
+
+.race-filters > label:nth-of-type(3) {
+  order: 3;
+}
+
+.race-filters > label:nth-of-type(4) {
+  order: 2;
+}
+
+.race-filters > label:nth-of-type(5) {
+  order: 5;
+}
+
+.race-filters > label:nth-of-type(6) {
+  order: 8;
+}
+
+.race-filters > label:nth-of-type(7) {
+  order: 9;
+}
+
+.race-filters > label:nth-of-type(8) {
+  order: 6;
+}
+
+.race-filters > label:nth-of-type(9) {
+  order: 7;
+}
+
+.race-filters > button {
+  order: 10;
 }
 
 .race-filters label {
@@ -743,6 +870,23 @@ button.secondary {
 }
 
 button.secondary:hover {
+  border-color: var(--accent);
+}
+
+.secondary-link {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 16px;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.secondary-link:hover {
   border-color: var(--accent);
 }
 

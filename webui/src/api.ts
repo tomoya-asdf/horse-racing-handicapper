@@ -40,6 +40,20 @@ export function formatDateTime(iso: string | null | undefined): string {
   ).padStart(2, "0")}`;
 }
 
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+export function formatFullDateTime(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(
+    d.getHours()
+  ).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 export function formatYen(value: number | null | undefined): string {
   if (value === null || value === undefined) return "-";
   return `${Math.round(value).toLocaleString()} 円`;

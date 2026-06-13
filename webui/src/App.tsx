@@ -6,6 +6,7 @@ import RacesPage from "./pages/Races";
 import BetsPage from "./pages/Bets";
 import JobsPage from "./pages/Jobs";
 import SettingsPage from "./pages/Settings";
+import HorsePage from "./pages/Horse";
 import type { AuthStatus } from "./types";
 
 const TABS = [
@@ -85,6 +86,8 @@ export default function App() {
   const [tab, setTab] = useState<TabId>("overview");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [showLogin, setShowLogin] = useState(false);
+  const horseMatch = window.location.pathname.match(/^\/horses\/([^/]+)$/);
+  const horseId = horseMatch ? decodeURIComponent(horseMatch[1]) : null;
   const visibleTabs = TABS.filter((t) => !t.adminOnly || auth?.authenticated);
 
   useEffect(() => {
@@ -115,7 +118,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="header">
+      {!horseId && <header className="header">
         <h1>
           競馬予測AI <span className="header-sub">管理コンソール</span>
         </h1>
@@ -146,7 +149,7 @@ export default function App() {
             )}
           </div>
         </div>
-      </header>
+      </header>}
       <main className="content">
         {showLogin && (
           <LoginPage
@@ -157,11 +160,12 @@ export default function App() {
             }}
           />
         )}
-        {!showLogin && tab === "overview" && <OverviewPage />}
-        {!showLogin && tab === "races" && <RacesPage />}
-        {!showLogin && tab === "bets" && <BetsPage />}
-        {!showLogin && auth?.authenticated && tab === "jobs" && <JobsPage />}
-        {!showLogin && auth?.authenticated && tab === "settings" && <SettingsPage />}
+        {!showLogin && horseId && <HorsePage horseId={horseId} />}
+        {!showLogin && !horseId && tab === "overview" && <OverviewPage />}
+        {!showLogin && !horseId && tab === "races" && <RacesPage />}
+        {!showLogin && !horseId && tab === "bets" && <BetsPage />}
+        {!showLogin && !horseId && auth?.authenticated && tab === "jobs" && <JobsPage />}
+        {!showLogin && !horseId && auth?.authenticated && tab === "settings" && <SettingsPage />}
       </main>
     </div>
   );
