@@ -521,15 +521,6 @@ h2 {
   gap: 6px;
 }
 
-.horse-detail-panel {
-  margin-top: 12px;
-  min-width: 1080px;
-  background: rgba(15, 20, 25, 0.45);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-}
-
 .horse-detail-header {
   display: flex;
   align-items: center;
