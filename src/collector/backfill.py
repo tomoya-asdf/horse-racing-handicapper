@@ -1,16 +1,7 @@
 """過去レースの一括取得(バックフィル)。
 
-学習データを増やすために、過去の開催日のレース・出走馬・最終オッズ・確定結果を
-まとめて取得してDBへ保存する。netkeibaのオッズAPIは過去レースに対しても
-最終オッズを返すため、学習時の特徴量(オッズ)も揃う。
-
-実行方法:
-    docker compose run --rm collector python -m src.collector.backfill 20260601 20260607
-
-開始日・終了日をYYYYMMDDで指定する(両端を含む)。1日だけなら同じ日付を2回指定。
-開催の無い日はレース一覧が空で返るだけなので、週をまたいで指定してよい。
-リクエストごとに SCRAPER_REQUEST_INTERVAL_SECONDS のスリープが入るため、
-1レースあたり約3秒(出馬表・オッズ・結果)かかる。
+モデル学習用のデータを増やすため、指定した開催日のレース、出馬表、
+最終オッズ、確定結果に加えて、出走馬の過去戦績と血統も取得する。
 """
 
 import logging
@@ -18,7 +9,7 @@ import sys
 from datetime import date, datetime, timedelta
 
 from src.collector import scraper
-from src.collector.main import _upsert_races
+from src.collector.main import _upsert_races, update_horse_results_for_race_dates
 from src.common.db import get_session, init_db
 from src.common.models import Race
 from src.common.timeutils import now_jst
@@ -32,19 +23,14 @@ def _apply_results(start: date, end: date) -> int:
     updated = 0
     session = get_session()
     try:
-        races = (
-            session.query(Race)
-            .filter(Race.race_date >= start, Race.race_date <= end)
-            .all()
-        )
+        races = session.query(Race).filter(Race.race_date >= start, Race.race_date <= end).all()
         for race in races:
             if not race.entries:
                 continue
             if any(e.finish_position is not None for e in race.entries):
-                continue  # 反映済み
+                continue
             if race.start_time is not None and race.start_time > now_jst():
-                continue  # まだ走っていない
-
+                continue
             try:
                 result = scraper.fetch_race_results(race.race_key)
             except Exception as exc:
@@ -76,7 +62,11 @@ def backfill(start: date, end: date) -> str:
         logger.info("%s: %d races collected", target, len(races))
 
     updated = _apply_results(start, end)
-    return f"取得レース={total}件({start}〜{end}), 結果反映={updated}件"
+    horses = update_horse_results_for_race_dates(start, end)
+    return (
+        f"取得レース={total}件({start}〜{end}), "
+        f"結果反映={updated}件, 馬過去戦績/血統取得={horses}頭"
+    )
 
 
 def main() -> None:
@@ -93,7 +83,7 @@ def main() -> None:
         print("開始日は終了日以前を指定してください")
         sys.exit(1)
     if end >= now_jst().date():
-        print("バックフィルは過去日付専用です(当日以降は通常の収集ジョブが対象)")
+        print("バックフィルは過去日付専用です。当日以降は通常の収集ジョブが対象です。")
         sys.exit(1)
 
     init_db()

@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -186,6 +186,68 @@ def _update_horse_results(limit: int) -> int:
     finally:
         session.close()
 
+    fetched = 0
+    for horse_id in horse_ids:
+        try:
+            data = scraper.fetch_horse_results(horse_id)
+        except Exception as exc:
+            logger.warning("failed to fetch horse results horse_id=%s: %s", horse_id, exc)
+            continue
+
+        ped = None
+        if horse_id not in sire_known:
+            try:
+                ped = scraper.fetch_horse_pedigree(horse_id)
+            except Exception as exc:
+                logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
+
+        session = get_session()
+        try:
+            _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
+            session.commit()
+            fetched += 1
+        except Exception:
+            session.rollback()
+            logger.exception("failed to upsert horse results horse_id=%s", horse_id)
+        finally:
+            session.close()
+    return fetched
+
+
+def update_horse_results_for_race_dates(start: date, end: date) -> int:
+    """Backfill後のモデル学習用に、期間内に出走した馬の過去戦績と血統を補完する。"""
+    stale_before = now_jst() - timedelta(days=settings.HORSE_RESULTS_REFRESH_DAYS)
+    session = get_session()
+    try:
+        rows = (
+            session.query(Entry.horse_id)
+            .join(Race, Race.id == Entry.race_id)
+            .outerjoin(Horse, Horse.horse_id == Entry.horse_id)
+            .filter(Race.race_date >= start, Race.race_date <= end)
+            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .filter(
+                (Horse.horse_id.is_(None))
+                | (Horse.results_fetched_at.is_(None))
+                | (Horse.results_fetched_at < stale_before)
+            )
+            .distinct()
+            .all()
+        )
+        horse_ids = [row[0] for row in rows]
+        sire_known = (
+            {
+                row[0]
+                for row in session.query(Horse.horse_id)
+                .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
+                .all()
+            }
+            if horse_ids
+            else set()
+        )
+    finally:
+        session.close()
+
+    logger.info("backfill horse result targets: %d horses", len(horse_ids))
     fetched = 0
     for horse_id in horse_ids:
         try:
