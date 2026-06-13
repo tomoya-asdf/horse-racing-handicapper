@@ -31,9 +31,13 @@ class ScheduledJobConfig:
     interval_minutes: int | None = None
     before_start_minutes: int | None = None
     after_start_minutes: int | None = None
+    weekdays: frozenset[int] = frozenset(range(7))
 
 
 EVENT_CHECK_INTERVAL_MINUTES = 1
+
+# 曜日はPythonのdate.weekday()に合わせ、月=0 〜 日=6 とする
+ALL_WEEKDAYS = "0,1,2,3,4,5,6"
 
 
 SCHEDULED_JOB_DEFS = (
@@ -41,6 +45,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect",
         "enabled_key": "schedule_collect_enabled",
         "interval_key": "schedule_collect_interval_minutes",
+        "days_key": "schedule_collect_days",
         "label": "データ収集",
         "description": "レース、出馬表、単勝オッズ、結果を更新します。",
         "default_interval": settings.COLLECT_INTERVAL_MINUTES,
@@ -49,6 +54,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "predict",
         "enabled_key": "schedule_predict_enabled",
         "interval_key": "schedule_predict_interval_minutes",
+        "days_key": "schedule_predict_days",
         "label": "AI予想",
         "description": "未確定レースに予測スコアを保存します。",
         "default_interval": settings.PREDICT_INTERVAL_MINUTES,
@@ -57,6 +63,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect_horses",
         "enabled_key": "schedule_collect_horses_enabled",
         "interval_key": "schedule_collect_horses_interval_minutes",
+        "days_key": "schedule_collect_horses_days",
         "label": "馬過去戦績収集",
         "description": "出走馬の過去戦績と血統をまとめて補完します。",
         "default_interval": settings.COLLECT_HORSES_INTERVAL_MINUTES,
@@ -65,6 +72,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "bet_decide",
         "enabled_key": "schedule_bet_decide_enabled",
         "before_key": "schedule_bet_decide_before_start_minutes",
+        "days_key": "schedule_bet_decide_days",
         "label": "賭け対象決定",
         "description": "次の発走時刻を基準に、指定分前に最新オッズで判定します。",
         "default_before": settings.BET_DECISION_LEAD_MINUTES,
@@ -73,6 +81,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "settle",
         "enabled_key": "schedule_settle_enabled",
         "after_key": "schedule_settle_after_start_minutes",
+        "days_key": "schedule_settle_days",
         "label": "決済",
         "description": "購入済みレースの発走時刻を基準に、指定分後から払戻を確認します。",
         "default_after": settings.SETTLE_DELAY_MINUTES,
@@ -81,6 +90,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "train",
         "enabled_key": "schedule_train_enabled",
         "interval_key": "schedule_train_interval_minutes",
+        "days_key": "schedule_train_days",
         "label": "モデル学習",
         "description": "確定済みレースから予測モデルを再学習します。",
         "default_interval": settings.TRAIN_INTERVAL_MINUTES,
@@ -98,6 +108,8 @@ def _schedule_defaults() -> dict[str, object]:
             defaults[str(item["before_key"])] = int(item["default_before"])
         if item.get("after_key"):
             defaults[str(item["after_key"])] = int(item["default_after"])
+        if item.get("days_key"):
+            defaults[str(item["days_key"])] = ALL_WEEKDAYS
     return defaults
 
 
@@ -133,6 +145,34 @@ def _parse_number(key: str, value: object) -> float:
         raise ValueError(f"{key} は数値を指定してください: {value!r}")
 
 
+def _parse_weekdays(key: str, value: object) -> str:
+    """曜日指定を ``"0,1,5"`` 形式の正規化文字列にする。
+
+    WebUIからは配列、app_settingsからはカンマ区切り文字列で渡る。曜日番号は
+    月=0〜日=6。空(どの曜日も選ばない)も許可し、その場合ジョブは実行されない。
+    """
+    if isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        raw = [part for part in str(value).split(",") if part.strip() != ""]
+    days: set[int] = set()
+    for part in raw:
+        try:
+            day = int(str(part).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} は0〜6の曜日番号で指定してください: {value!r}")
+        if not 0 <= day <= 6:
+            raise ValueError(f"{key} は0〜6の曜日番号で指定してください: {value!r}")
+        days.add(day)
+    return ",".join(str(day) for day in sorted(days))
+
+
+def _weekdays_from_str(value: object) -> frozenset[int]:
+    return frozenset(
+        int(part) for part in str(value).split(",") if part.strip() != ""
+    )
+
+
 def _parse(key: str, value: object):
     if key == "betting_mode":
         if value not in ("prod", "sim"):
@@ -141,6 +181,9 @@ def _parse(key: str, value: object):
 
     if key.startswith("schedule_") and key.endswith("_enabled"):
         return _parse_bool(key, value)
+
+    if key.startswith("schedule_") and key.endswith("_days"):
+        return _parse_weekdays(key, value)
 
     if key.startswith("schedule_") and (
         key.endswith("_interval_minutes")
@@ -222,6 +265,7 @@ def load_scheduled_job_config(job_name: str) -> ScheduledJobConfig | None:
         after_start_minutes=(
             int(merged[item["after_key"]]) if item.get("after_key") else None
         ),
+        weekdays=_weekdays_from_str(merged[item["days_key"]]),
     )
 
 
@@ -273,6 +317,19 @@ def _next_settle_run_at(session, after_start_minutes: int) -> datetime | None:
     return max(now, row[0] + timedelta(minutes=after_start_minutes))
 
 
+def _restrict_to_weekdays(dt: datetime | None, weekdays: frozenset[int]) -> datetime | None:
+    """``dt`` を実行可能な曜日に丸める。当日が対象外なら次の対象曜日の0時へ繰り上げる。"""
+    if dt is None or not weekdays:
+        return None
+    if dt.weekday() in weekdays:
+        return dt
+    for offset in range(1, 8):
+        candidate = dt + timedelta(days=offset)
+        if candidate.weekday() in weekdays:
+            return candidate.replace(hour=0, minute=0, second=0, microsecond=0)
+    return None
+
+
 def scheduled_jobs_view() -> list[dict]:
     merged = _merged_settings()
     session = get_session()
@@ -290,6 +347,7 @@ def scheduled_jobs_view() -> list[dict]:
             after_start = (
                 int(merged[item["after_key"]]) if item.get("after_key") else None
             )
+            weekdays = _weekdays_from_str(merged[item["days_key"]])
 
             if interval is not None:
                 next_run_at = _next_interval_run_at(session, job_name, interval)
@@ -300,6 +358,8 @@ def scheduled_jobs_view() -> list[dict]:
             else:
                 next_run_at = None
 
+            next_run_at = _restrict_to_weekdays(next_run_at, weekdays)
+
             items.append(
                 {
                     "job_name": job_name,
@@ -307,12 +367,14 @@ def scheduled_jobs_view() -> list[dict]:
                     "interval_key": item.get("interval_key"),
                     "before_start_key": item.get("before_key"),
                     "after_start_key": item.get("after_key"),
+                    "days_key": item["days_key"],
                     "label": item["label"],
                     "description": item["description"],
                     "enabled": enabled,
                     "interval_minutes": interval,
                     "before_start_minutes": before_start,
                     "after_start_minutes": after_start,
+                    "days": sorted(weekdays),
                     "next_run_at": (
                         next_run_at.isoformat() if enabled and next_run_at is not None else None
                     ),

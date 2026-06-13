@@ -886,8 +886,33 @@ button.secondary:hover {
 }
 
 .settings-schedule-table {
-  max-width: 920px;
+  max-width: 1100px;
   margin-bottom: 10px;
+}
+
+.weekday-toggles {
+  display: flex;
+  gap: 3px;
+}
+
+.weekday-toggle {
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.weekday-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0f1419;
+  font-weight: 600;
 }
 
 .jobs-schedule-table {

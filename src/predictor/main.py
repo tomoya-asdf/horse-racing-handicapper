@@ -327,7 +327,9 @@ def _scheduled_predict() -> None:
     config = load_scheduled_job_config(jobs.PREDICT)
     if config is None or not config.enabled:
         return
-    if not jobs.scheduled_run_due(jobs.PREDICT, config.interval_minutes):
+    if not jobs.scheduled_run_due(
+        jobs.PREDICT, config.interval_minutes, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.PREDICT, _run_predict)
 
@@ -344,7 +346,9 @@ def _scheduled_bet_decide() -> None:
     due_at = _next_bet_decide_due_at(before_start_minutes)
     if due_at is None:
         return
-    if not jobs.scheduled_run_due(jobs.BET_DECIDE, config.interval_minutes, due_at=due_at):
+    if not jobs.scheduled_run_due(
+        jobs.BET_DECIDE, config.interval_minutes, due_at=due_at, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.BET_DECIDE, _run_bet_decide)
 
@@ -361,7 +365,9 @@ def _scheduled_settle() -> None:
     due_at = _next_settle_due_at(after_start_minutes)
     if due_at is None:
         return
-    if not jobs.scheduled_run_due(jobs.SETTLE, config.interval_minutes, due_at=due_at):
+    if not jobs.scheduled_run_due(
+        jobs.SETTLE, config.interval_minutes, due_at=due_at, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.SETTLE, _run_settle)
 
@@ -370,7 +376,9 @@ def _scheduled_train() -> None:
     config = load_scheduled_job_config(jobs.TRAIN)
     if config is None or not config.enabled:
         return
-    if not jobs.scheduled_run_due(jobs.TRAIN, config.interval_minutes):
+    if not jobs.scheduled_run_due(
+        jobs.TRAIN, config.interval_minutes, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.TRAIN, _run_train)
 

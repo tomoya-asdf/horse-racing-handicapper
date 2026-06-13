@@ -5,6 +5,30 @@ import type { ScheduledJobSetting, SettingsView } from "../types";
 
 type ScheduleForm = Record<string, string | boolean>;
 
+// 曜日番号はPythonのdate.weekday()に合わせ、月=0〜日=6。表示は日曜始まり。
+const WEEKDAYS: { label: string; value: number }[] = [
+  { label: "日", value: 6 },
+  { label: "月", value: 0 },
+  { label: "火", value: 1 },
+  { label: "水", value: 2 },
+  { label: "木", value: 3 },
+  { label: "金", value: 4 },
+  { label: "土", value: 5 },
+];
+
+function parseDays(value: string | boolean | undefined): Set<number> {
+  return new Set(
+    String(value ?? "")
+      .split(",")
+      .filter((part) => part.trim() !== "")
+      .map(Number)
+  );
+}
+
+function daysToString(days: Set<number>): string {
+  return [...days].sort((a, b) => a - b).join(",");
+}
+
 function scheduleToForm(jobs: ScheduledJobSetting[]): ScheduleForm {
   const form: ScheduleForm = {};
   for (const job of jobs) {
@@ -16,6 +40,7 @@ function scheduleToForm(jobs: ScheduledJobSetting[]): ScheduleForm {
     if (job.after_start_key) {
       form[job.after_start_key] = String(job.after_start_minutes ?? 0);
     }
+    form[job.days_key] = (job.days ?? []).join(",");
   }
   return form;
 }
@@ -54,6 +79,16 @@ export default function SettingsPage() {
     setScheduleForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const toggleDay = (key: string, day: number) => {
+    const days = parseDays(scheduleForm[key]);
+    if (days.has(day)) {
+      days.delete(day);
+    } else {
+      days.add(day);
+    }
+    updateScheduleField(key, daysToString(days));
+  };
+
   const save = async () => {
     setError(null);
     setMessage(null);
@@ -86,6 +121,7 @@ export default function SettingsPage() {
         if (job.after_start_key) {
           payload[job.after_start_key] = Number(scheduleForm[job.after_start_key]);
         }
+        payload[job.days_key] = String(scheduleForm[job.days_key] ?? "");
       }
 
       const updated = await putJSON<SettingsView>("/api/settings", payload);
@@ -165,6 +201,7 @@ export default function SettingsPage() {
             <th>確認間隔(分)</th>
             <th>発走前(分)</th>
             <th>発走後(分)</th>
+            <th>実行曜日</th>
             <th>次回予定</th>
             <th>内容</th>
           </tr>
@@ -226,6 +263,24 @@ export default function SettingsPage() {
                 ) : (
                   "-"
                 )}
+              </td>
+              <td>
+                <div className="weekday-toggles">
+                  {WEEKDAYS.map((day) => {
+                    const active = parseDays(scheduleForm[job.days_key]).has(day.value);
+                    return (
+                      <button
+                        type="button"
+                        key={day.value}
+                        className={`weekday-toggle${active ? " active" : ""}`}
+                        aria-pressed={active}
+                        onClick={() => toggleDay(job.days_key, day.value)}
+                      >
+                        {day.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </td>
               <td>{job.enabled ? formatDateTime(job.next_run_at) : "-"}</td>
               <td className="muted">{job.description}</td>

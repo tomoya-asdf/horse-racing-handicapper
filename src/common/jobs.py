@@ -41,9 +41,16 @@ POLL_INTERVAL_SECONDS = 5
 STALE_RUNNING_MINUTES = 60
 
 
-def scheduled_run_due(job_name: str, interval_minutes: int, due_at=None) -> bool:
-    """Return True when a scheduled job is enabled to start a new run now."""
+def scheduled_run_due(
+    job_name: str, interval_minutes: int, due_at=None, weekdays=None
+) -> bool:
+    """Return True when a scheduled job is enabled to start a new run now.
+
+    ``weekdays`` を渡すと、当日の曜日(月=0〜日=6)が含まれないとき実行しない。
+    """
     now = now_jst()
+    if weekdays is not None and now.weekday() not in weekdays:
+        return False
     if due_at is not None and due_at > now:
         return False
 

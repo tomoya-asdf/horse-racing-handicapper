@@ -324,7 +324,9 @@ def _scheduled_collect() -> None:
     config = load_scheduled_job_config(jobs.COLLECT)
     if config is None or not config.enabled:
         return
-    if not jobs.scheduled_run_due(jobs.COLLECT, config.interval_minutes):
+    if not jobs.scheduled_run_due(
+        jobs.COLLECT, config.interval_minutes, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.COLLECT, _run_collect)
 
@@ -333,7 +335,9 @@ def _scheduled_collect_horses() -> None:
     config = load_scheduled_job_config(jobs.COLLECT_HORSES)
     if config is None or not config.enabled:
         return
-    if not jobs.scheduled_run_due(jobs.COLLECT_HORSES, config.interval_minutes):
+    if not jobs.scheduled_run_due(
+        jobs.COLLECT_HORSES, config.interval_minutes, weekdays=config.weekdays
+    ):
         return
     jobs.run_scheduled(jobs.COLLECT_HORSES, _run_collect_horses)
 

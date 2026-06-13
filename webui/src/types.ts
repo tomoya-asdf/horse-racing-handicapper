@@ -49,6 +49,12 @@ export interface SettingsView {
     schedule_train_interval_minutes: number;
     schedule_bet_decide_before_start_minutes: number;
     schedule_settle_after_start_minutes: number;
+    schedule_collect_days: string;
+    schedule_predict_days: string;
+    schedule_collect_horses_days: string;
+    schedule_train_days: string;
+    schedule_bet_decide_days: string;
+    schedule_settle_days: string;
   };
   readonly: {
     scraper_request_interval_seconds: number;
@@ -65,12 +71,14 @@ export interface ScheduledJobSetting {
   interval_key: keyof SettingsView["editable"] | null;
   before_start_key: keyof SettingsView["editable"] | null;
   after_start_key: keyof SettingsView["editable"] | null;
+  days_key: keyof SettingsView["editable"];
   label: string;
   description: string;
   enabled: boolean;
   interval_minutes: number | null;
   before_start_minutes: number | null;
   after_start_minutes: number | null;
+  days: number[];
   next_run_at: string | null;
 }
 
