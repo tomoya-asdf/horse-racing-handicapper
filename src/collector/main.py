@@ -170,31 +170,28 @@ def _horse_ids_to_fetch(session, limit: int) -> list[str]:
     return [row[0] for row in rows]
 
 
-def _update_horse_results(limit: int) -> int:
-    """出走馬のうち過去成績が未取得・古い馬を最大limit頭まで収集する。
+def _known_sire_ids(session, horse_ids: list[str]) -> set[str]:
+    """``horse_ids`` のうち父(sire_id)が取得済みの馬IDを返す。
 
-    netkeibaへの負荷を抑えるため頭数を制限し、馬ごとに短いトランザクションで
-    コミットする(途中失敗で前の馬の成果を失わないため)。
+    父は1頭1回取れば十分なので、ここに含まれる馬は血統取得をスキップする。
     """
-    if limit <= 0:
-        return 0
-    session = get_session()
-    try:
-        horse_ids = _horse_ids_to_fetch(session, limit)
-        # 父(sire)は1頭1回取れば十分なので、既に取得済みの馬はスキップする
-        sire_known = (
-            {
-                row[0]
-                for row in session.query(Horse.horse_id)
-                .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
-                .all()
-            }
-            if horse_ids
-            else set()
-        )
-    finally:
-        session.close()
+    if not horse_ids:
+        return set()
+    return {
+        row[0]
+        for row in session.query(Horse.horse_id)
+        .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
+        .all()
+    }
 
+
+def _fetch_and_store_horse_results(horse_ids: list[str], sire_known: set[str]) -> int:
+    """馬IDを順に取得し、過去成績(と未取得なら血統)を horse_results へ保存する。
+
+    netkeibaへの負荷を抑えるため馬ごとに短いトランザクションでコミットし、途中失敗で
+    前の馬の成果を失わないようにする。``sire_known`` の馬は父が取得済みのため血統取得を
+    スキップする。保存できた頭数を返す。
+    """
     fetched = 0
     for horse_id in horse_ids:
         try:
@@ -221,6 +218,24 @@ def _update_horse_results(limit: int) -> int:
         finally:
             session.close()
     return fetched
+
+
+def _update_horse_results(limit: int) -> int:
+    """出走馬のうち過去成績が未取得・古い馬を最大limit頭まで収集する。
+
+    netkeibaへの負荷を抑えるため頭数を制限し、馬ごとに短いトランザクションで
+    コミットする(途中失敗で前の馬の成果を失わないため)。
+    """
+    if limit <= 0:
+        return 0
+    session = get_session()
+    try:
+        horse_ids = _horse_ids_to_fetch(session, limit)
+        sire_known = _known_sire_ids(session, horse_ids)
+    finally:
+        session.close()
+
+    return _fetch_and_store_horse_results(horse_ids, sire_known)
 
 
 def update_horse_results_for_race_dates(start: date, end: date) -> int:
@@ -243,46 +258,12 @@ def update_horse_results_for_race_dates(start: date, end: date) -> int:
             .all()
         )
         horse_ids = [row[0] for row in rows]
-        sire_known = (
-            {
-                row[0]
-                for row in session.query(Horse.horse_id)
-                .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
-                .all()
-            }
-            if horse_ids
-            else set()
-        )
+        sire_known = _known_sire_ids(session, horse_ids)
     finally:
         session.close()
 
     logger.info("backfill horse result targets: %d horses", len(horse_ids))
-    fetched = 0
-    for horse_id in horse_ids:
-        try:
-            data = scraper.fetch_horse_results(horse_id)
-        except Exception as exc:
-            logger.warning("failed to fetch horse results horse_id=%s: %s", horse_id, exc)
-            continue
-
-        ped = None
-        if horse_id not in sire_known:
-            try:
-                ped = scraper.fetch_horse_pedigree(horse_id)
-            except Exception as exc:
-                logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
-
-        session = get_session()
-        try:
-            _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
-            session.commit()
-            fetched += 1
-        except Exception:
-            session.rollback()
-            logger.exception("failed to upsert horse results horse_id=%s", horse_id)
-        finally:
-            session.close()
-    return fetched
+    return _fetch_and_store_horse_results(horse_ids, sire_known)
 
 
 def _run_collect(params: dict) -> str:
