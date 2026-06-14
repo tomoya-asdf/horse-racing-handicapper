@@ -8,7 +8,7 @@ from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import BettingConfig, load_betting_config, load_scheduled_job_config
-from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race
+from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race, RaceOdds
 from src.common.timeutils import now_jst
 from src.predictor import backtest, betting, model, settlement, train
 from src.predictor.features import build_features
@@ -113,12 +113,38 @@ def _refresh_race_odds(session, race: Race, day_cache: dict) -> None:
         entry.weight = entry_data["weight"]
         if entry_data.get("odds") is not None:
             entry.odds = entry_data["odds"]
+            entry.pre_race_odds = entry_data["odds"]
         if entry_data.get("popularity") is not None:
             entry.popularity = entry_data["popularity"]
         if entry_data.get("horse_weight") is not None:
             entry.horse_weight = entry_data["horse_weight"]
         if entry_data.get("horse_weight_diff") is not None:
             entry.horse_weight_diff = entry_data["horse_weight_diff"]
+    session.flush()
+
+
+def _save_race_odds(session, race: Race, odds_by_type: dict[str, dict[str, float]]) -> None:
+    existing = {
+        (row.bet_type, row.combination): row
+        for row in session.query(RaceOdds).filter_by(race_id=race.id).all()
+    }
+    for bet_type, odds_map in odds_by_type.items():
+        for combination, odds in odds_map.items():
+            if odds is None or odds <= 0:
+                continue
+            key = (bet_type, combination)
+            row = existing.get(key)
+            if row is None:
+                session.add(
+                    RaceOdds(
+                        race_id=race.id,
+                        bet_type=bet_type,
+                        combination=combination,
+                        odds=float(odds),
+                    )
+                )
+            else:
+                row.odds = float(odds)
     session.flush()
 
 
@@ -312,8 +338,9 @@ def _run_bet_decide(params: dict) -> str:
                     skipped_already_bet += 1
                     continue
 
-                quinella_odds = scraper.fetch_quinella_odds(race.race_key)
-                bets = betting.decide_bets(race, predictions, config, quinella_odds)
+                odds_by_type = scraper.fetch_supported_odds(race.race_key)
+                _save_race_odds(session, race, odds_by_type)
+                bets = betting.decide_bets(race, predictions, config, odds_by_type=odds_by_type)
                 if bets:
                     new_bets += _place_bets(session, bets, config)
             except Exception:

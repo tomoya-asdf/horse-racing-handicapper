@@ -8,8 +8,8 @@ from src.common.models import Bet, BetStatus
 
 logger = logging.getLogger(__name__)
 
-SINGLE_PAYOUT_KEYS = {"単勝": "win"}
-COMBINATION_PAYOUT_KEYS = {"馬連": "quinella"}
+SINGLE_PAYOUT_KEYS = {"単勝": "win", "複勝": "place"}
+COMBINATION_PAYOUT_KEYS = {"馬連": "quinella", "ワイド": "wide"}
 
 
 def _bet_horse_numbers(bet: Bet) -> list[int]:

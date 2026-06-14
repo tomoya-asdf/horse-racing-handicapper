@@ -75,7 +75,12 @@ def _upsert_races(races: list[dict]) -> None:
                 # 既存の値を消さないよう、値があるときだけ上書きする
                 # (馬体重は当日計量のため、数日先の収集ではNoneのことが多い)
                 if entry_data.get("odds") is not None:
-                    entry.odds = entry_data["odds"]
+                    odds = entry_data["odds"]
+                    entry.odds = odds
+                    if race.start_time is not None and race.start_time <= now_jst():
+                        entry.final_odds = odds
+                    else:
+                        entry.pre_race_odds = odds
                 if entry_data.get("popularity") is not None:
                     entry.popularity = entry_data["popularity"]
                 if entry_data.get("horse_weight") is not None:
@@ -92,6 +97,7 @@ def _update_finished_results() -> int:
     """確定したレースの着順をDBへ反映し、反映できたレース数を返す。"""
     updated = 0
     session = get_session()
+    day_cache: dict = {}
     try:
         now = now_jst()
         races = (
@@ -120,9 +126,26 @@ def _update_finished_results() -> int:
             positions = {e["horse_number"]: e["finish_position"] for e in result["entries"]}
             if not positions:
                 continue
+            if race.race_date not in day_cache:
+                day_cache[race.race_date] = scraper.fetch_upcoming_races(
+                    race.race_date,
+                    include_started=True,
+                )
+            latest = next(
+                (item for item in day_cache[race.race_date] if item["race_key"] == race.race_key),
+                None,
+            )
+            final_odds_by_number = {
+                item["horse_number"]: item.get("odds")
+                for item in latest["entries"]
+                if item.get("odds") is not None
+            } if latest is not None else {}
             for entry in race.entries:
                 if entry.horse_number in positions:
                     entry.finish_position = positions[entry.horse_number]
+                if entry.horse_number in final_odds_by_number:
+                    entry.final_odds = final_odds_by_number[entry.horse_number]
+                    entry.odds = final_odds_by_number[entry.horse_number]
             updated += 1
 
         session.commit()

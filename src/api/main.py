@@ -43,6 +43,7 @@ from src.common.models import (
 )
 from src.common.paths import MODEL_PATH
 from src.common.timeutils import now_jst
+from src.predictor import betting
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,6 +89,23 @@ def _bet_stats(bets: list[Bet]) -> dict:
     settled = [b for b in placed if b.is_settled]
     invested = sum(b.amount for b in settled)
     payout = sum(b.payout or 0 for b in settled)
+    by_type = {}
+    for bet_type in sorted({b.bet_type for b in bets}):
+        type_bets = [b for b in bets if b.bet_type == bet_type]
+        type_placed = [b for b in type_bets if b.status == BetStatus.PLACED.value]
+        type_settled = [b for b in type_placed if b.is_settled]
+        type_invested = sum(b.amount for b in type_settled)
+        type_payout = sum(b.payout or 0 for b in type_settled)
+        by_type[bet_type] = {
+            "invested": type_invested,
+            "payout": type_payout,
+            "recovery_rate": (type_payout / type_invested * 100) if type_invested else None,
+            "settled_count": len(type_settled),
+            "unsettled_count": len(type_placed) - len(type_settled),
+            "pending_count": sum(1 for b in type_bets if b.status == BetStatus.PENDING.value),
+            "dry_run_count": sum(1 for b in type_bets if b.status == BetStatus.DRY_RUN.value),
+            "failed_count": sum(1 for b in type_bets if b.status == BetStatus.FAILED.value),
+        }
     return {
         "invested": invested,
         "payout": payout,
@@ -97,6 +115,7 @@ def _bet_stats(bets: list[Bet]) -> dict:
         "pending_count": sum(1 for b in bets if b.status == BetStatus.PENDING.value),
         "dry_run_count": sum(1 for b in bets if b.status == BetStatus.DRY_RUN.value),
         "failed_count": sum(1 for b in bets if b.status == BetStatus.FAILED.value),
+        "by_type": by_type,
     }
 
 
@@ -229,17 +248,57 @@ def overview(request: Request) -> dict:
             or 0
         )
         horse_result_horse_count = (
-            session.query(func.count(func.distinct(HorseResult.horse_id))).scalar() or 0
+            session.query(func.count(func.distinct(Entry.horse_id)))
+            .join(HorseResult, HorseResult.horse_id == Entry.horse_id)
+            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .scalar()
+            or 0
         )
+        horse_target_count = (
+            session.query(func.count(func.distinct(Entry.horse_id)))
+            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .scalar()
+            or 0
+        )
+        horse_uncollected_count = max(horse_target_count - horse_result_horse_count, 0)
         jockey_result_jockey_count = (
-            session.query(func.count(func.distinct(JockeyResult.jockey_id))).scalar() or 0
+            session.query(func.count(func.distinct(Entry.jockey_id)))
+            .join(JockeyResult, JockeyResult.jockey_id == Entry.jockey_id)
+            .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
+            .scalar()
+            or 0
         )
+        jockey_target_count = (
+            session.query(func.count(func.distinct(Entry.jockey_id)))
+            .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
+            .scalar()
+            or 0
+        )
+        jockey_uncollected_count = max(jockey_target_count - jockey_result_jockey_count, 0)
         trainer_result_trainer_count = (
-            session.query(func.count(func.distinct(TrainerResult.trainer_id))).scalar() or 0
+            session.query(func.count(func.distinct(Entry.trainer_id)))
+            .join(TrainerResult, TrainerResult.trainer_id == Entry.trainer_id)
+            .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
+            .scalar()
+            or 0
         )
+        trainer_target_count = (
+            session.query(func.count(func.distinct(Entry.trainer_id)))
+            .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
+            .scalar()
+            or 0
+        )
+        trainer_uncollected_count = max(trainer_target_count - trainer_result_trainer_count, 0)
         last_collected_at = session.query(func.max(Race.created_at)).scalar()
         upcoming_race_count = (
             session.query(func.count(Race.id))
+            .filter(Race.start_time.isnot(None), Race.start_time > now_jst())
+            .scalar()
+            or 0
+        )
+        predicted_upcoming_race_count = (
+            session.query(func.count(func.distinct(Prediction.race_id)))
+            .join(Race, Race.id == Prediction.race_id)
             .filter(Race.start_time.isnot(None), Race.start_time > now_jst())
             .scalar()
             or 0
@@ -273,9 +332,16 @@ def overview(request: Request) -> dict:
             "race_count": race_count,
             "finished_race_count": finished_race_count,
             "horse_result_horse_count": horse_result_horse_count,
+            "horse_target_count": horse_target_count,
+            "horse_uncollected_count": horse_uncollected_count,
             "jockey_result_jockey_count": jockey_result_jockey_count,
+            "jockey_target_count": jockey_target_count,
+            "jockey_uncollected_count": jockey_uncollected_count,
             "trainer_result_trainer_count": trainer_result_trainer_count,
+            "trainer_target_count": trainer_target_count,
+            "trainer_uncollected_count": trainer_uncollected_count,
             "upcoming_race_count": upcoming_race_count,
+            "predicted_upcoming_race_count": predicted_upcoming_race_count,
             "last_collected_at": _iso(last_collected_at),
         },
         "modes": modes,
@@ -365,6 +431,7 @@ def list_races(
                 selectinload(Race.entries),
                 selectinload(Race.predictions),
                 selectinload(Race.bets),
+                selectinload(Race.odds),
             )
             .order_by(Race.race_date.desc(), Race.start_time.desc(), Race.id.desc())
             .offset(page_offset)
@@ -433,6 +500,7 @@ def race_detail(request: Request, race_id: int) -> dict:
                 selectinload(Race.entries),
                 selectinload(Race.predictions),
                 selectinload(Race.bets),
+                selectinload(Race.odds),
             )
             .filter(Race.id == race_id)
             .one_or_none()
@@ -454,9 +522,49 @@ def race_detail(request: Request, race_id: int) -> dict:
         bet_entry_ids = {b.entry_id for b in visible_bets}
         betting_config = load_betting_config()
         ai_rank_map = _rank_entries(score_map, reverse=True)
+        value_odds_map = {
+            e.id: e.pre_race_odds if e.pre_race_odds is not None else e.odds
+            for e in race.entries
+        }
         odds_rank_map = _rank_entries(
-            {e.id: e.odds for e in race.entries if e.odds is not None and e.odds > 0}
+            {
+                e.id: value
+                for e in race.entries
+                if (value := value_odds_map[e.id]) is not None and value > 0
+            }
         )
+        entry_count = len(race.entries)
+        pair_count = entry_count * (entry_count - 1) // 2
+        odds_rows_by_type: dict[str, set[str]] = {}
+        for row in race.odds:
+            odds_rows_by_type.setdefault(row.bet_type, set()).add(row.combination)
+        odds_status = [
+            {
+                "bet_type": "単勝",
+                "available": sum(
+                    1
+                    for e in race.entries
+                    if (e.pre_race_odds is not None and e.pre_race_odds > 0)
+                    or (e.odds is not None and e.odds > 0)
+                ),
+                "total": entry_count,
+            },
+            {
+                "bet_type": "複勝",
+                "available": len(odds_rows_by_type.get("複勝", set())),
+                "total": entry_count,
+            },
+            {
+                "bet_type": "馬連",
+                "available": len(odds_rows_by_type.get("馬連", set())),
+                "total": pair_count,
+            },
+            {
+                "bet_type": "ワイド",
+                "available": len(odds_rows_by_type.get("ワイド", set())),
+                "total": pair_count,
+            },
+        ]
 
         ranked_entries = sorted(
             [e for e in race.entries if e.id in score_map],
@@ -482,13 +590,37 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "horse_name": e.horse_name,
                 "score": score_map[e.id],
                 "ai_rank": ai_rank_map.get(e.id),
-                "odds": e.odds,
+                "odds": value_odds_map[e.id],
                 "odds_rank": odds_rank_map.get(e.id),
                 "expected_value": (
-                    score_map[e.id] * e.odds if e.odds is not None and e.odds > 0 else None
+                    score_map[e.id] * value_odds_map[e.id]
+                    if value_odds_map[e.id] is not None and value_odds_map[e.id] > 0
+                    else None
                 ),
             }
             for e in ranked_entries[:3]
+        ]
+        candidate_entries = {e.id: e for e in race.entries}
+        bet_candidates = [
+            {
+                "bet_type": c.bet_type,
+                "entry_id": c.entry_id,
+                "horse_number": candidate_entries[c.entry_id].horse_number
+                if c.entry_id in candidate_entries
+                else None,
+                "horse_name": candidate_entries[c.entry_id].horse_name
+                if c.entry_id in candidate_entries
+                else None,
+                "combination": c.combination,
+                "probability": c.probability,
+                "odds": c.odds,
+                "expected_value": c.expected_value,
+            }
+            for c in betting.build_bet_candidates(
+                race,
+                [p for p in race.predictions if p.model_version == model_version],
+                betting_config,
+            )
         ]
 
         entries = [
@@ -507,24 +639,30 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "horse_weight": e.horse_weight,
                 "horse_weight_diff": e.horse_weight_diff,
                 "odds": e.odds,
+                "pre_race_odds": e.pre_race_odds,
+                "final_odds": e.final_odds,
                 "popularity": e.popularity if e.popularity is not None else odds_rank_map.get(e.id),
                 "finish_position": e.finish_position,
                 "score": score_map.get(e.id),
                 "ai_rank": ai_rank_map.get(e.id),
                 "odds_rank": odds_rank_map.get(e.id),
                 "expected_value": (
-                    score_map[e.id] * e.odds
-                    if e.id in score_map and e.odds is not None and e.odds > 0
+                    score_map[e.id] * value_odds_map[e.id]
+                    if e.id in score_map
+                    and value_odds_map[e.id] is not None
+                    and value_odds_map[e.id] > 0
                     else None
                 ),
                 "value_label": (
                     "妙味あり"
                     if e.id in score_map
-                    and e.odds is not None
-                    and e.odds > 0
-                    and score_map[e.id] * e.odds >= betting_config.min_expected_value
+                    and value_odds_map[e.id] is not None
+                    and value_odds_map[e.id] > 0
+                    and score_map[e.id] * value_odds_map[e.id] >= betting_config.min_expected_value
                     else "見送り"
-                    if e.id in score_map and e.odds is not None and e.odds > 0
+                    if e.id in score_map
+                    and value_odds_map[e.id] is not None
+                    and value_odds_map[e.id] > 0
                     else None
                 ),
                 "ai_vs_odds": (
@@ -573,8 +711,10 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "top_ai": top_ai,
                 "score_gap": score_gap,
                 "race_shape": race_shape,
+                "odds_status": odds_status,
             },
             "entries": entries,
+            "bet_candidates": bet_candidates,
             "bets": bets,
         }
     finally:

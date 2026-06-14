@@ -11,8 +11,9 @@
 """
 
 import logging
+from dataclasses import dataclass
+from itertools import combinations, permutations
 
-from src.collector.scraper import normalize_combination, parse_race_key
 from src.common.config import settings
 from src.common.dynamic_config import BettingConfig
 from src.common.models import Bet, Prediction, Race
@@ -21,8 +22,15 @@ logger = logging.getLogger(__name__)
 
 IPAT_TOP_URL = "https://www.ipat.jra.go.jp/"
 
-# IPAT自動購入(本番)が対応する券別。馬連はsim/バックテストのみで、本番自動購入は未対応
-SUPPORTED_BET_TYPES = {"単勝"}
+BET_TYPE_WIN = "単勝"
+BET_TYPE_PLACE = "複勝"
+BET_TYPE_QUINELLA = "馬連"
+BET_TYPE_WIDE = "ワイド"
+
+# IPAT自動購入(本番)が対応する券別。複数券種はsim/バックテストのみで、本番自動購入は未対応
+SUPPORTED_BET_TYPES = {BET_TYPE_WIN}
+SUPPORTED_STRATEGY_BET_TYPES = (BET_TYPE_WIN, BET_TYPE_PLACE, BET_TYPE_QUINELLA, BET_TYPE_WIDE)
+MAX_BETS_PER_RACE = 3
 
 # 要実機検証: 各画面の入力欄・ボタンのセレクタ。
 # IPATにログインできる環境で開発者ツールを使い、実際の id/name/テキストに置き換えること。
@@ -50,106 +58,214 @@ SELECTORS = {
 }
 
 
+def normalize_combination(numbers) -> str:
+    return "-".join(str(n) for n in sorted(int(x) for x in numbers))
+
+
+@dataclass(frozen=True)
+class BetCandidate:
+    bet_type: str
+    entry_id: int
+    combination: str
+    probability: float
+    odds: float
+    expected_value: float
+    amount: float = 0.0
+
+
 def decide_bets(
     race: Race,
     predictions: list[Prediction],
     config: BettingConfig,
     quinella_odds: dict[str, float] | None = None,
+    odds_by_type: dict[str, dict[str, float]] | None = None,
 ) -> list[Bet]:
     """予測スコアから賭け対象・券別・金額を決定し、Bet エンティティのリストを返す。
 
-    単勝と馬連を併用する。共通の考え方は「スコアだけで買うと1番人気ばかりになり
+    複数券種を併用する。共通の考え方は「スコアだけで買うと1番人気ばかりになり
     長期回収率が控除率(約80%)に収束するため、期待値(確率×オッズ)を併用する」こと。
 
-    - 単勝: 最有力馬のスコアが ``score_threshold`` 以上、かつ 期待値(スコア×単勝オッズ)が
-      ``min_expected_value`` 以上なら単勝を買う。
-    - 馬連: ``quinella_odds`` が渡され、AI上位2頭のペアの期待値(ペア的中確率×馬連オッズ)が
-      ``min_expected_value`` 以上なら馬連を買う(最有力馬のスコアが ``score_threshold`` 未満の
-      弱い予想のレースでは見送る)。
-
+    単勝・複勝・馬連・ワイドの候補を作り、期待値が閾値以上の候補へ100円単位で配分する。
     オッズが無い対象には賭けない。設定値はWebUIから変更できる。
     """
-    bets: list[Bet] = []
-    win_bet = _decide_win(race, predictions, config)
-    if win_bet is not None:
-        bets.append(win_bet)
-    if quinella_odds:
-        quinella_bet = _decide_quinella(race, predictions, config, quinella_odds)
-        if quinella_bet is not None:
-            bets.append(quinella_bet)
-    return bets
+    if odds_by_type is None:
+        odds_by_type = _odds_from_race(race)
+        if quinella_odds:
+            odds_by_type[BET_TYPE_QUINELLA] = quinella_odds
+
+    candidates = build_bet_candidates(race, predictions, config, odds_by_type)
+    selected = allocate_candidates(candidates, config.amount * MAX_BETS_PER_RACE)
+    return [
+        Bet(
+            race_id=race.id,
+            entry_id=c.entry_id,
+            mode=config.mode,
+            bet_type=c.bet_type,
+            combination=None if c.bet_type in (BET_TYPE_WIN, BET_TYPE_PLACE) else c.combination,
+            amount=c.amount or config.amount,
+            odds_at_bet=c.odds,
+            is_settled=False,
+        )
+        for c in selected
+    ]
 
 
-def _decide_win(race: Race, predictions: list[Prediction], config: BettingConfig) -> Bet | None:
-    if not predictions:
-        return None
-
-    best = max(predictions, key=lambda p: p.score)
-    if best.score < config.score_threshold:
-        return None
-
-    entry = next((e for e in race.entries if e.id == best.entry_id), None)
-    if entry is None or entry.odds is None or entry.odds <= 0:
-        logger.info("オッズ未取得のため単勝を見送ります: race_id=%s", race.id)
-        return None
-
-    if best.score * entry.odds < config.min_expected_value:
-        return None
-
-    return Bet(
-        race_id=race.id,
-        entry_id=best.entry_id,
-        mode=config.mode,
-        bet_type="単勝",
-        amount=config.amount,
-        odds_at_bet=entry.odds,
-        is_settled=False,
-    )
-
-
-def _decide_quinella(
+def build_bet_candidates(
     race: Race,
     predictions: list[Prediction],
     config: BettingConfig,
-    quinella_odds: dict[str, float],
-) -> Bet | None:
-    if len(predictions) < 2:
-        return None
-
-    top2 = sorted(predictions, key=lambda p: p.score, reverse=True)[:2]
-    p1, p2 = top2[0].score, top2[1].score
-    # 弱い予想(最有力でも閾値未満)のレースは見送る。確率は0<p<1のみ扱う
-    if p1 < config.score_threshold or not (0 < p2 <= p1 < 1):
-        return None
-
+    odds_by_type: dict[str, dict[str, float]] | None = None,
+) -> list[BetCandidate]:
+    if not predictions:
+        return []
+    odds_by_type = odds_by_type or _odds_from_race(race)
+    probs = _normalized_probabilities(predictions)
+    raw_scores = {p.entry_id: float(p.score) for p in predictions}
     entry_map = {e.id: e for e in race.entries}
-    e1 = entry_map.get(top2[0].entry_id)
-    e2 = entry_map.get(top2[1].entry_id)
-    if e1 is None or e2 is None:
-        return None
+    candidates: list[BetCandidate] = []
 
-    # Harville近似: 2頭が1-2着(順不同)になる確率
-    # P = p1*p2/(1-p1) + p2*p1/(1-p2) = p1*p2*(1/(1-p1)+1/(1-p2))
-    pair_prob = p1 * p2 * (1.0 / (1.0 - p1) + 1.0 / (1.0 - p2))
+    for entry_id, score in raw_scores.items():
+        entry = entry_map.get(entry_id)
+        if entry is None or score < config.score_threshold:
+            continue
+        win_odds = odds_by_type.get(BET_TYPE_WIN, {}).get(str(entry.horse_number))
+        if win_odds:
+            candidates.append(_candidate(BET_TYPE_WIN, entry_id, str(entry.horse_number), score, win_odds))
+        place_odds = odds_by_type.get(BET_TYPE_PLACE, {}).get(str(entry.horse_number))
+        if place_odds:
+            place_prob = _place_probability(entry_id, probs)
+            candidates.append(_candidate(BET_TYPE_PLACE, entry_id, str(entry.horse_number), place_prob, place_odds))
 
-    combination = normalize_combination([e1.horse_number, e2.horse_number])
-    odds = quinella_odds.get(combination)
-    if odds is None or odds <= 0:
-        return None
+    ranked = sorted(
+        [p for p in predictions if p.entry_id in entry_map],
+        key=lambda p: p.score,
+        reverse=True,
+    )[:6]
+    for p1, p2 in combinations(ranked, 2):
+        if max(p1.score, p2.score) < config.score_threshold:
+            continue
+        e1 = entry_map[p1.entry_id]
+        e2 = entry_map[p2.entry_id]
+        combination = normalize_combination([e1.horse_number, e2.horse_number])
+        quinella_odds = odds_by_type.get(BET_TYPE_QUINELLA, {}).get(combination)
+        if quinella_odds:
+            prob = _quinella_probability(p1.entry_id, p2.entry_id, probs)
+            candidates.append(_candidate(BET_TYPE_QUINELLA, p1.entry_id, combination, prob, quinella_odds))
+        wide_odds = odds_by_type.get(BET_TYPE_WIDE, {}).get(combination)
+        if wide_odds:
+            prob = _wide_probability(p1.entry_id, p2.entry_id, probs)
+            candidates.append(_candidate(BET_TYPE_WIDE, p1.entry_id, combination, prob, wide_odds))
 
-    if pair_prob * odds < config.min_expected_value:
-        return None
-
-    return Bet(
-        race_id=race.id,
-        entry_id=top2[0].entry_id,
-        mode=config.mode,
-        bet_type="馬連",
-        combination=combination,
-        amount=config.amount,
-        odds_at_bet=odds,
-        is_settled=False,
+    return sorted(
+        [c for c in candidates if c.expected_value >= config.min_expected_value],
+        key=lambda c: (c.expected_value, c.probability),
+        reverse=True,
     )
+
+
+def allocate_candidates(candidates: list[BetCandidate], bankroll: float) -> list[BetCandidate]:
+    """期待値上位の候補へ100円単位で配分する。"""
+    units = int(bankroll // 100)
+    if units <= 0:
+        return []
+    selected = candidates[: min(MAX_BETS_PER_RACE, len(candidates), units)]
+    if not selected:
+        return []
+    weights = [max(c.expected_value - 1.0, 0.01) for c in selected]
+    total = sum(weights)
+    raw_units = [max(1, int(units * w / total)) for w in weights]
+    while sum(raw_units) > units:
+        idx = max(range(len(raw_units)), key=lambda i: raw_units[i])
+        raw_units[idx] -= 1
+    idx = 0
+    while sum(raw_units) < units:
+        raw_units[idx % len(raw_units)] += 1
+        idx += 1
+    return [
+        BetCandidate(
+            bet_type=c.bet_type,
+            entry_id=c.entry_id,
+            combination=c.combination,
+            probability=c.probability,
+            odds=c.odds,
+            expected_value=c.expected_value,
+            amount=raw_units[i] * 100,
+        )
+        for i, c in enumerate(selected)
+        if raw_units[i] > 0
+    ]
+
+
+def _candidate(bet_type: str, entry_id: int, combination: str, probability: float, odds: float) -> BetCandidate:
+    probability = max(0.0, min(float(probability), 1.0))
+    return BetCandidate(
+        bet_type=bet_type,
+        entry_id=entry_id,
+        combination=combination,
+        probability=probability,
+        odds=float(odds),
+        expected_value=probability * float(odds),
+    )
+
+
+def _odds_from_race(race: Race) -> dict[str, dict[str, float]]:
+    odds: dict[str, dict[str, float]] = {bet_type: {} for bet_type in SUPPORTED_STRATEGY_BET_TYPES}
+    for entry in race.entries:
+        win_odds = entry.pre_race_odds if entry.pre_race_odds is not None else entry.odds
+        if win_odds is not None and win_odds > 0:
+            odds[BET_TYPE_WIN][str(entry.horse_number)] = float(win_odds)
+    for row in getattr(race, "odds", []) or []:
+        if row.odds is not None and row.odds > 0:
+            odds.setdefault(row.bet_type, {})[row.combination] = float(row.odds)
+    return odds
+
+
+def _normalized_probabilities(predictions: list[Prediction]) -> dict[int, float]:
+    raw = {p.entry_id: max(float(p.score), 0.0001) for p in predictions if p.score is not None}
+    total = sum(raw.values())
+    if total <= 0:
+        return {}
+    return {entry_id: value / total for entry_id, value in raw.items()}
+
+
+def _ordered_probability(order: tuple[int, ...], probs: dict[int, float]) -> float:
+    remaining = 1.0
+    result = 1.0
+    for entry_id in order:
+        p = probs.get(entry_id, 0.0)
+        if remaining <= 0 or p <= 0:
+            return 0.0
+        result *= p / remaining
+        remaining -= p
+    return result
+
+
+def _place_probability(entry_id: int, probs: dict[int, float]) -> float:
+    ids = list(probs)
+    if entry_id not in probs:
+        return 0.0
+    prob = probs[entry_id]
+    others = [i for i in ids if i != entry_id]
+    for first in others:
+        prob += _ordered_probability((first, entry_id), probs)
+    for first, second in permutations(others, 2):
+        prob += _ordered_probability((first, second, entry_id), probs)
+    return min(prob, 1.0)
+
+
+def _quinella_probability(a: int, b: int, probs: dict[int, float]) -> float:
+    return min(_ordered_probability((a, b), probs) + _ordered_probability((b, a), probs), 1.0)
+
+
+def _wide_probability(a: int, b: int, probs: dict[int, float]) -> float:
+    if len(probs) == 2:
+        return 1.0
+    others = [i for i in probs if i not in (a, b)]
+    prob = 0.0
+    for third in others:
+        for order in permutations((a, b, third), 3):
+            prob += _ordered_probability(order, probs)
+    return min(prob, 1.0)
 
 
 def place_bet_production(bet: Bet) -> None:
@@ -166,6 +282,8 @@ def place_bet_production(bet: Bet) -> None:
 
     if bet.bet_type not in SUPPORTED_BET_TYPES:
         raise NotImplementedError(f"未対応の式別です: {bet.bet_type}")
+
+    from src.collector.scraper import parse_race_key
 
     race_info = parse_race_key(bet.race.race_key)
     horse_number = bet.entry.horse_number

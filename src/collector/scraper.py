@@ -49,6 +49,18 @@ VENUE_CODES = {
 _session = requests.Session()
 _session.headers.update({"User-Agent": USER_AGENT})
 
+BET_TYPE_WIN = "単勝"
+BET_TYPE_PLACE = "複勝"
+BET_TYPE_QUINELLA = "馬連"
+BET_TYPE_WIDE = "ワイド"
+
+JRA_ODDS_TYPES = {
+    BET_TYPE_WIN: "1",
+    BET_TYPE_PLACE: "2",
+    BET_TYPE_QUINELLA: "4",
+    BET_TYPE_WIDE: "5",
+}
+
 
 def _get(url: str, **kwargs) -> requests.Response:
     response = _session.get(url, timeout=10, **kwargs)
@@ -155,6 +167,23 @@ def _parse_float(text: str) -> float | None:
         return None
 
 
+def _parse_odds_value(value) -> float | None:
+    """APIのオッズ値をfloat化する。複勝/ワイドのレンジは下限で扱う。"""
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    text = str(value).replace(",", "").strip()
+    if not text:
+        return None
+    candidates = re.findall(r"\d+(?:\.\d+)?", text)
+    if not candidates:
+        return None
+    try:
+        odds = float(candidates[0])
+    except ValueError:
+        return None
+    return odds if odds > 0 else None
+
+
 def _find_race_ids(target_date: date) -> list[str]:
     """指定日に開催されるレースのrace_id一覧を取得する。"""
     response = _get(
@@ -172,24 +201,28 @@ def _find_race_ids(target_date: date) -> list[str]:
     return sorted(race_ids)
 
 
-def _fetch_win_odds(race_id: str) -> dict[str, float]:
-    """単勝オッズを馬番(2桁文字列)->オッズのdictで返す。取得失敗時は空dict。"""
+def _fetch_jra_odds(race_id: str, odds_type: str) -> dict:
     try:
         response = _get(
             f"{BASE_URL}/api/api_get_jra_odds.html",
-            params={"race_id": race_id, "type": "1"},
+            params={"race_id": race_id, "type": odds_type},
         )
-        odds_data = response.json()["data"]["odds"]["1"]
+        odds_data = response.json()["data"]["odds"][odds_type]
     except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-        logger.warning("failed to fetch odds for race_id=%s: %s", race_id, exc)
+        logger.warning("failed to fetch odds for race_id=%s type=%s: %s", race_id, odds_type, exc)
         return {}
+    return odds_data if isinstance(odds_data, dict) else {}
+
+
+def _fetch_win_odds(race_id: str) -> dict[str, float]:
+    """単勝オッズを馬番(2桁文字列)->オッズのdictで返す。取得失敗時は空dict。"""
+    odds_data = _fetch_jra_odds(race_id, JRA_ODDS_TYPES[BET_TYPE_WIN])
 
     result: dict[str, float] = {}
     for horse_number, values in odds_data.items():
-        try:
-            result[horse_number] = float(values[0])
-        except (TypeError, ValueError, IndexError):
-            continue
+        odds = _parse_odds_value(values)
+        if odds is not None:
+            result[horse_number] = odds
     return result
 
 
@@ -201,36 +234,52 @@ def normalize_combination(numbers) -> str:
     return "-".join(str(n) for n in sorted(int(x) for x in numbers))
 
 
-def fetch_quinella_odds(race_id: str) -> dict[str, float]:
-    """馬連オッズを 買い目('4-9') -> オッズ のdictで返す。取得失敗時は空dict。
+def _fetch_single_horse_odds(race_id: str, bet_type: str) -> dict[str, float]:
+    odds_type = JRA_ODDS_TYPES[bet_type]
+    odds_data = _fetch_jra_odds(race_id, odds_type)
+    result: dict[str, float] = {}
+    for horse_number, values in odds_data.items():
+        if not str(horse_number).isdigit():
+            continue
+        odds = _parse_odds_value(values)
+        if odds is not None:
+            result[str(int(horse_number))] = odds
+    return result
 
-    JRAオッズAPI(type=4)はキーが '0409'(馬番2桁×2)、値が [オッズ, ..., 人気]。
-    '-3.0'(出走取消ペア)等のオッズ0以下は除外する。発走前でオッズ未公開なら空dict。
-    """
-    try:
-        response = _get(
-            f"{BASE_URL}/api/api_get_jra_odds.html",
-            params={"race_id": race_id, "type": "4"},
-        )
-        odds_data = response.json()["data"]["odds"]["4"]
-    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-        logger.warning("failed to fetch quinella odds for race_id=%s: %s", race_id, exc)
-        return {}
-    if not isinstance(odds_data, dict):
-        return {}
 
+def _fetch_pair_odds(race_id: str, bet_type: str) -> dict[str, float]:
+    odds_type = JRA_ODDS_TYPES[bet_type]
+    odds_data = _fetch_jra_odds(race_id, odds_type)
     result: dict[str, float] = {}
     for pair_key, values in odds_data.items():
         if len(pair_key) != 4 or not pair_key.isdigit():
             continue
-        try:
-            odds = float(str(values[0]).replace(",", ""))
-        except (TypeError, ValueError, IndexError):
-            continue
-        if odds <= 0:
-            continue
-        result[normalize_combination((pair_key[:2], pair_key[2:]))] = odds
+        odds = _parse_odds_value(values)
+        if odds is not None:
+            result[normalize_combination((pair_key[:2], pair_key[2:]))] = odds
     return result
+
+
+def fetch_quinella_odds(race_id: str) -> dict[str, float]:
+    """馬連オッズを 買い目('4-9') -> オッズ のdictで返す。取得失敗時は空dict。"""
+    return _fetch_pair_odds(race_id, BET_TYPE_QUINELLA)
+
+
+def fetch_bet_type_odds(race_id: str, bet_type: str) -> dict[str, float]:
+    """券種別オッズを共通形式で返す。単勝/複勝は馬番、馬連/ワイドは組み合わせ。"""
+    if bet_type in (BET_TYPE_WIN, BET_TYPE_PLACE):
+        return _fetch_single_horse_odds(race_id, bet_type)
+    if bet_type in (BET_TYPE_QUINELLA, BET_TYPE_WIDE):
+        return _fetch_pair_odds(race_id, bet_type)
+    raise ValueError(f"unsupported bet_type: {bet_type}")
+
+
+def fetch_supported_odds(race_id: str) -> dict[str, dict[str, float]]:
+    """買い目判定で使う主要券種のオッズをまとめて取得する。"""
+    return {
+        bet_type: fetch_bet_type_odds(race_id, bet_type)
+        for bet_type in (BET_TYPE_WIN, BET_TYPE_PLACE, BET_TYPE_QUINELLA, BET_TYPE_WIDE)
+    }
 
 
 def _fill_popularity(entries: list[dict]) -> None:
@@ -606,7 +655,7 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
     return races
 
 
-_BET_TYPE_MAP = {"単勝": "win", "複勝": "place", "馬連": "quinella"}
+_BET_TYPE_MAP = {"単勝": "win", "複勝": "place", "馬連": "quinella", "ワイド": "wide"}
 # 1頭指定の券種(払戻が馬番1つ)。それ以外(馬連等)は買い目(複数馬番)として扱う
 _SINGLE_BET_TYPES = {"win", "place"}
 

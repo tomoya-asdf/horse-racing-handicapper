@@ -62,6 +62,7 @@ class Race(Base):
     entries = relationship("Entry", back_populates="race", cascade="all, delete-orphan")
     predictions = relationship("Prediction", back_populates="race", cascade="all, delete-orphan")
     bets = relationship("Bet", back_populates="race", cascade="all, delete-orphan")
+    odds = relationship("RaceOdds", back_populates="race", cascade="all, delete-orphan")
 
 
 class Entry(Base):
@@ -83,6 +84,8 @@ class Entry(Base):
     horse_weight = Column(Integer)  # 馬体重(kg)。当日計量のため発走前日まではNoneのことが多い
     horse_weight_diff = Column(Integer)  # 前走からの馬体重増減(kg)
     odds = Column(Float)  # 発走前は予想オッズ、発走後は最終オッズ(収集の度に上書き)
+    pre_race_odds = Column(Float)  # 発走前に取得した予想/直前単勝オッズ
+    final_odds = Column(Float)  # 発走後に取得した確定単勝オッズ
     popularity = Column(Integer)  # 人気順位(発走前は予想人気)。netkeibaから取得、無ければオッズ昇順で導出
     finish_position = Column(Integer)
 
@@ -292,3 +295,20 @@ class Bet(Base):
 
     race = relationship("Race", back_populates="bets")
     entry = relationship("Entry")
+
+
+class RaceOdds(Base):
+    __tablename__ = "race_odds"
+    __table_args__ = (
+        UniqueConstraint("race_id", "bet_type", "combination", name="uq_race_odds_type_combo"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    race_id = Column(Integer, ForeignKey("races.id"), nullable=False)
+    bet_type = Column(String, nullable=False)
+    # 単勝・複勝は馬番、馬連・ワイドは "4-9" のような昇順組み合わせ
+    combination = Column(String, nullable=False)
+    odds = Column(Float, nullable=False)
+    fetched_at = Column(DateTime, default=now_jst)
+
+    race = relationship("Race", back_populates="odds")

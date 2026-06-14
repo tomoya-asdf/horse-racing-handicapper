@@ -69,10 +69,24 @@ def _winning_quinella(race: Race) -> str | None:
 
 def _bet_won(bet, race: Race, win_combo: str | None) -> bool:
     """その賭けが的中したか(単勝=1着、馬連=1-2着の組み合わせ一致)。"""
+    positions = {
+        e.horse_number: e.finish_position
+        for e in race.entries
+        if e.finish_position is not None
+    }
     if bet.bet_type == "馬連":
         return bet.combination is not None and bet.combination == win_combo
+    if bet.bet_type == "ワイド":
+        if bet.combination is None:
+            return False
+        numbers = [int(n) for n in bet.combination.split("-")]
+        return all(positions.get(n, 99) <= 3 for n in numbers)
     entry = next((e for e in race.entries if e.id == bet.entry_id), None)
-    return entry is not None and entry.finish_position == 1
+    if entry is None:
+        return False
+    if bet.bet_type == "複勝":
+        return entry.finish_position is not None and entry.finish_position <= 3
+    return entry.finish_position == 1
 
 
 def _evaluate(
@@ -83,15 +97,30 @@ def _evaluate(
     payout = 0.0
     bets = 0
     hits = 0
-    for race, preds, quinella_odds in race_preds:
+    by_type: dict[str, dict] = {}
+    for race, preds, odds_by_type in race_preds:
         win_combo = _winning_quinella(race)
-        for bet in decide_bets(race, preds, config, quinella_odds):
+        for bet in decide_bets(race, preds, config, odds_by_type=odds_by_type):
             bets += 1
             invested += bet.amount
+            type_stats = by_type.setdefault(
+                bet.bet_type,
+                {"bets": 0, "hits": 0, "invested": 0.0, "payout": 0.0},
+            )
+            type_stats["bets"] += 1
+            type_stats["invested"] += bet.amount
             if _bet_won(bet, race, win_combo):
                 # 払戻 = 賭け金 × 確定オッズ(単勝は単勝オッズ、馬連は馬連オッズ)
-                payout += bet.amount * (bet.odds_at_bet or 0.0)
+                bet_payout = bet.amount * (bet.odds_at_bet or 0.0)
+                payout += bet_payout
                 hits += 1
+                type_stats["hits"] += 1
+                type_stats["payout"] += bet_payout
+    for stats in by_type.values():
+        stats["hit_rate"] = (stats["hits"] / stats["bets"] * 100) if stats["bets"] else None
+        stats["recovery_rate"] = (
+            stats["payout"] / stats["invested"] * 100
+        ) if stats["invested"] else None
     return {
         "bets": bets,
         "hits": hits,
@@ -99,6 +128,7 @@ def _evaluate(
         "payout": payout,
         "hit_rate": (hits / bets * 100) if bets else None,
         "recovery_rate": (payout / invested * 100) if invested else None,
+        "by_type": by_type,
     }
 
 
@@ -149,9 +179,9 @@ def run_backtest(start: date, end: date, config: BettingConfig | None = None) ->
                 ),
             )
             preds = [_Pred(entry_id=int(eid), score=float(score)) for eid, score in scores.items()]
-            # 馬連の評価用に確定済みレースの最終馬連オッズを取得する
-            quinella_odds = scraper.fetch_quinella_odds(race.race_key)
-            race_preds.append((race, preds, quinella_odds))
+            # 評価用に確定済みレースの最終オッズを取得する
+            odds_by_type = scraper.fetch_supported_odds(race.race_key)
+            race_preds.append((race, preds, odds_by_type))
 
         result = _evaluate(race_preds, config)
         sweep = [
@@ -203,6 +233,13 @@ def format_summary(report: dict) -> str:
             f"  期待値>={s['min_expected_value']}: 購入{s['bets']}件 "
             f"的中率{_pct(s['hit_rate'])} 回収率{_pct(s['recovery_rate'])}"
         )
+    if r.get("by_type"):
+        lines.append("券種別:")
+        for bet_type, stats in sorted(r["by_type"].items()):
+            lines.append(
+                f"  {bet_type}: 購入{stats['bets']}件 "
+                f"的中率{_pct(stats['hit_rate'])} 回収率{_pct(stats['recovery_rate'])}"
+            )
     return "\n".join(lines)
 
 
