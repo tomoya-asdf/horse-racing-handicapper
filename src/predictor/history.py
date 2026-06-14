@@ -16,7 +16,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from src.common.models import Horse, HorseResult
+from src.common.models import Horse, HorseResult, JockeyResult, TrainerResult
 
 # 同距離とみなす許容差(m)。1600m戦なら1400〜1800mの実績を「同距離帯」として集計する
 SAME_DISTANCE_TOLERANCE = 200
@@ -36,6 +36,28 @@ HISTORY_FEATURES = [
     "same_dist_avg_finish",  # 同距離帯の平均着順
     "same_surface_starts",  # 同馬場種別(芝/ダ)の出走数
     "same_surface_avg_finish",  # 同馬場種別の平均着順
+]
+
+JOCKEY_HISTORY_FEATURES = [
+    "jockey_starts",
+    "jockey_win_rate",
+    "jockey_place_rate",
+    "jockey_avg_finish_recent10",
+    "jockey_same_dist_starts",
+    "jockey_same_dist_win_rate",
+    "jockey_same_surface_starts",
+    "jockey_same_surface_win_rate",
+]
+
+TRAINER_HISTORY_FEATURES = [
+    "trainer_starts",
+    "trainer_win_rate",
+    "trainer_place_rate",
+    "trainer_avg_finish_recent10",
+    "trainer_same_dist_starts",
+    "trainer_same_dist_win_rate",
+    "trainer_same_surface_starts",
+    "trainer_same_surface_win_rate",
 ]
 
 
@@ -92,11 +114,108 @@ def load_sire_map(session) -> dict[str, str]:
     return {str(horse_id): str(sire_id) for horse_id, sire_id in rows}
 
 
+def _load_person_history(session, model, id_column: str) -> dict[str, pd.DataFrame]:
+    person_id = getattr(model, id_column)
+    rows = (
+        session.query(
+            person_id,
+            model.race_date,
+            model.finish_position,
+            model.distance,
+            model.track_type,
+        )
+        .filter(person_id.isnot(None))
+        .all()
+    )
+    if not rows:
+        return {}
+
+    df = pd.DataFrame(
+        rows,
+        columns=["person_id", "race_date", "finish_position", "distance", "track_type"],
+    )
+    df["race_date"] = pd.to_datetime(df["race_date"], errors="coerce")
+    history: dict[str, pd.DataFrame] = {}
+    for person_id_value, group in df.groupby("person_id"):
+        history[str(person_id_value)] = group.reset_index(drop=True)
+    return history
+
+
+def load_jockey_history(session) -> dict[str, pd.DataFrame]:
+    return _load_person_history(session, JockeyResult, "jockey_id")
+
+
+def load_trainer_history(session) -> dict[str, pd.DataFrame]:
+    return _load_person_history(session, TrainerResult, "trainer_id")
+
+
 def _empty_features() -> dict[str, float]:
     feats: dict[str, float] = {name: np.nan for name in HISTORY_FEATURES}
     feats["career_starts"] = 0
     feats["same_dist_starts"] = 0
     feats["same_surface_starts"] = 0
+    return feats
+
+
+def _empty_person_features(prefix: str) -> dict[str, float]:
+    feats = {
+        f"{prefix}_starts": 0,
+        f"{prefix}_win_rate": np.nan,
+        f"{prefix}_place_rate": np.nan,
+        f"{prefix}_avg_finish_recent10": np.nan,
+        f"{prefix}_same_dist_starts": 0,
+        f"{prefix}_same_dist_win_rate": np.nan,
+        f"{prefix}_same_surface_starts": 0,
+        f"{prefix}_same_surface_win_rate": np.nan,
+    }
+    return feats
+
+
+def compute_person_history_features(
+    past: pd.DataFrame | None,
+    prefix: str,
+    race_date: date | None,
+    distance: int | None,
+    track_type: str | None,
+) -> dict[str, float]:
+    feats = _empty_person_features(prefix)
+    if past is None or race_date is None:
+        return feats
+
+    cutoff = pd.Timestamp(race_date)
+    past = past[past["race_date"].notna() & (past["race_date"] < cutoff)]
+    if past.empty:
+        return feats
+    past = past.sort_values("race_date", ascending=False)
+
+    finished = past[past["finish_position"].notna()]
+    starts = int(len(finished))
+    feats[f"{prefix}_starts"] = starts
+    if starts <= 0:
+        return feats
+
+    finish = finished["finish_position"].astype(float)
+    feats[f"{prefix}_win_rate"] = float((finish == 1).mean())
+    feats[f"{prefix}_place_rate"] = float((finish <= 3).mean())
+    feats[f"{prefix}_avg_finish_recent10"] = float(finish.head(10).mean())
+
+    if distance is not None:
+        dist = finished["distance"].astype(float)
+        same_dist = finished[dist.notna() & ((dist - distance).abs() <= SAME_DISTANCE_TOLERANCE)]
+        feats[f"{prefix}_same_dist_starts"] = int(len(same_dist))
+        if len(same_dist) > 0:
+            feats[f"{prefix}_same_dist_win_rate"] = float(
+                (same_dist["finish_position"].astype(float) == 1).mean()
+            )
+
+    if track_type is not None:
+        same_surface = finished[finished["track_type"] == track_type]
+        feats[f"{prefix}_same_surface_starts"] = int(len(same_surface))
+        if len(same_surface) > 0:
+            feats[f"{prefix}_same_surface_win_rate"] = float(
+                (same_surface["finish_position"].astype(float) == 1).mean()
+            )
+
     return feats
 
 
@@ -158,7 +277,12 @@ def compute_history_features(
 
 
 def build_entries_frame(
-    entries, race, history: dict[str, pd.DataFrame], sire_map: dict[str, str] | None = None
+    entries,
+    race,
+    history: dict[str, pd.DataFrame],
+    sire_map: dict[str, str] | None = None,
+    jockey_history: dict[str, pd.DataFrame] | None = None,
+    trainer_history: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """1レースの出走馬から、build_features に渡す入力DataFrameを組み立てる。
 
@@ -167,6 +291,8 @@ def build_entries_frame(
     学習・予測の双方がこの関数を通すことで、同一の特徴量定義を保証する。
     """
     sire_map = sire_map or {}
+    jockey_history = jockey_history or {}
+    trainer_history = trainer_history or {}
     # 季節(sin/cos)はレース単位で同じ値。出走馬ごとに再計算せず一度だけ求める
     season_sin, season_cos = season_features(race.race_date)
     rows = []
@@ -174,6 +300,20 @@ def build_entries_frame(
     for entry in entries:
         feats = compute_history_features(
             history.get(entry.horse_id) if entry.horse_id else None,
+            race.race_date,
+            race.distance,
+            race.track_type,
+        )
+        jockey_feats = compute_person_history_features(
+            jockey_history.get(entry.jockey_id) if entry.jockey_id else None,
+            "jockey",
+            race.race_date,
+            race.distance,
+            race.track_type,
+        )
+        trainer_feats = compute_person_history_features(
+            trainer_history.get(entry.trainer_id) if entry.trainer_id else None,
+            "trainer",
             race.race_date,
             race.distance,
             race.track_type,
@@ -193,6 +333,8 @@ def build_entries_frame(
                 "season_sin": season_sin,
                 "season_cos": season_cos,
                 **feats,
+                **jockey_feats,
+                **trainer_feats,
             }
         )
         index.append(entry.id)

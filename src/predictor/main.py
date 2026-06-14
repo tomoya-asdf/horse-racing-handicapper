@@ -12,7 +12,13 @@ from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Ra
 from src.common.timeutils import now_jst
 from src.predictor import backtest, betting, model, settlement, train
 from src.predictor.features import build_features
-from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
+from src.predictor.history import (
+    build_entries_frame,
+    load_horse_history,
+    load_jockey_history,
+    load_sire_map,
+    load_trainer_history,
+)
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -117,10 +123,18 @@ def _refresh_race_odds(session, race: Race, day_cache: dict) -> None:
 
 
 def _predict_race(
-    race: Race, model_bundle: dict, session, history: dict, sire_map: dict
+    race: Race,
+    model_bundle: dict,
+    session,
+    history: dict,
+    sire_map: dict,
+    jockey_history: dict,
+    trainer_history: dict,
 ) -> list[Prediction]:
     entries = race.entries
-    entries_df = build_entries_frame(entries, race, history, sire_map)
+    entries_df = build_entries_frame(
+        entries, race, history, sire_map, jockey_history, trainer_history
+    )
     scores = model.predict(model_bundle, build_features(entries_df))
 
     predictions = []
@@ -199,6 +213,8 @@ def _run_predict(params: dict) -> str:
         )
         history = load_horse_history(session)
         sire_map = load_sire_map(session)
+        jockey_history = load_jockey_history(session)
+        trainer_history = load_trainer_history(session)
         for race in races:
             if not _is_unfinished_race(race):
                 continue
@@ -212,7 +228,15 @@ def _run_predict(params: dict) -> str:
                 if existing is not None:
                     skipped_existing += 1
                     continue
-                _predict_race(race, model_bundle, session, history, sire_map)
+                _predict_race(
+                    race,
+                    model_bundle,
+                    session,
+                    history,
+                    sire_map,
+                    jockey_history,
+                    trainer_history,
+                )
                 session.commit()
                 predicted_races += 1
             except Exception:

@@ -143,6 +143,78 @@ class HorseResult(Base):
     created_at = Column(DateTime, default=now_jst)
 
 
+class Jockey(Base):
+    __tablename__ = "jockeys"
+
+    jockey_id = Column(String, primary_key=True)
+    name = Column(String)
+    results_fetched_at = Column(DateTime)
+
+
+class JockeyResult(Base):
+    __tablename__ = "jockey_results"
+    __table_args__ = (
+        UniqueConstraint("jockey_id", "race_key", "horse_id", name="uq_jockey_results_race_horse"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    jockey_id = Column(String, index=True, nullable=False)
+    race_key = Column(String)
+    race_date = Column(Date)
+    venue = Column(String)
+    race_name = Column(String)
+    field_size = Column(Integer)
+    horse_id = Column(String)
+    horse_name = Column(String)
+    horse_number = Column(Integer)
+    trainer = Column(String)
+    trainer_id = Column(String)
+    weight = Column(Float)
+    odds = Column(Float)
+    popularity = Column(Integer)
+    finish_position = Column(Integer)
+    distance = Column(Integer)
+    track_type = Column(String)
+    going = Column(String)
+    created_at = Column(DateTime, default=now_jst)
+
+
+class Trainer(Base):
+    __tablename__ = "trainers"
+
+    trainer_id = Column(String, primary_key=True)
+    name = Column(String)
+    results_fetched_at = Column(DateTime)
+
+
+class TrainerResult(Base):
+    __tablename__ = "trainer_results"
+    __table_args__ = (
+        UniqueConstraint("trainer_id", "race_key", "horse_id", name="uq_trainer_results_race_horse"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    trainer_id = Column(String, index=True, nullable=False)
+    race_key = Column(String)
+    race_date = Column(Date)
+    venue = Column(String)
+    race_name = Column(String)
+    field_size = Column(Integer)
+    horse_id = Column(String)
+    horse_name = Column(String)
+    horse_number = Column(Integer)
+    jockey = Column(String)
+    jockey_id = Column(String)
+    weight = Column(Float)
+    odds = Column(Float)
+    popularity = Column(Integer)
+    finish_position = Column(Integer)
+    distance = Column(Integer)
+    track_type = Column(String)
+    going = Column(String)
+    created_at = Column(DateTime, default=now_jst)
+
+
 class Prediction(Base):
     __tablename__ = "predictions"
     __table_args__ = (

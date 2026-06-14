@@ -1,16 +1,11 @@
-"""過去レースの一括取得(バックフィル)。
-
-モデル学習用のデータを増やすため、指定した開催日のレース、出馬表、
-最終オッズ、確定結果に加えて、出走馬の過去戦績と血統も取得する。
-"""
+"""Backfill historical races, entries, odds, and race results."""
 
 import logging
 import sys
 from datetime import date, datetime, timedelta
 
 from src.collector import scraper
-from src.collector.main import _upsert_races, update_horse_results_for_race_dates
-from src.common.config import settings
+from src.collector.main import _upsert_races
 from src.common.db import get_session, init_db
 from src.common.models import Race
 from src.common.timeutils import now_jst
@@ -20,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_results(start: date, end: date) -> int:
-    """期間内の発走済みレースに確定着順を反映し、反映できたレース数を返す。"""
     updated = 0
     session = get_session()
     try:
@@ -65,29 +59,24 @@ def backfill(start: date, end: date) -> str:
         updated += daily_updated
         logger.info("%s: %d races collected, %d results applied", target, len(races), daily_updated)
 
-    horse_limit = settings.BACKFILL_HORSE_RESULTS_LIMIT
-    horses = update_horse_results_for_race_dates(start, end, limit=horse_limit)
-    return (
-        f"取得レース={total}件({start}〜{end}), "
-        f"結果反映={updated}件, 馬過去戦績/血統取得={horses}頭(上限{horse_limit}頭)"
-    )
+    return f"取得レース={total}件({start}〜{end}), 結果反映={updated}件"
 
 
 def main() -> None:
     if len(sys.argv) != 3:
-        print("usage: python -m src.collector.backfill <開始日YYYYMMDD> <終了日YYYYMMDD>")
+        print("usage: python -m src.collector.backfill <start YYYYMMDD> <end YYYYMMDD>")
         sys.exit(1)
     try:
         start = datetime.strptime(sys.argv[1], "%Y%m%d").date()
         end = datetime.strptime(sys.argv[2], "%Y%m%d").date()
     except ValueError:
-        print("日付はYYYYMMDD形式で指定してください")
+        print("dates must be YYYYMMDD")
         sys.exit(1)
     if start > end:
-        print("開始日は終了日以前を指定してください")
+        print("start date must be before or equal to end date")
         sys.exit(1)
     if end >= now_jst().date():
-        print("バックフィルは過去日付専用です。当日以降は通常の収集ジョブが対象です。")
+        print("backfill is only for past dates; use collect for today and future dates")
         sys.exit(1)
 
     init_db()

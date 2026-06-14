@@ -33,9 +33,13 @@ from src.common.models import (
     Entry,
     Horse,
     HorseResult,
+    Jockey,
+    JockeyResult,
     JobRun,
     Prediction,
     Race,
+    Trainer,
+    TrainerResult,
 )
 from src.common.paths import MODEL_PATH
 from src.common.timeutils import now_jst
@@ -57,6 +61,13 @@ JOB_LABELS = {
 }
 
 # 一度にバックフィルできる最大日数(netkeibaへの負荷を抑えるため)
+JOB_LABELS.update(
+    {
+        jobs.COLLECT_JOCKEYS: "騎手過去戦績収集",
+        jobs.COLLECT_TRAINERS: "調教師過去戦績収集",
+    }
+)
+
 BACKFILL_MAX_DAYS = 31
 ADMIN_COOKIE_NAME = "admin_session"
 ADMIN_SESSION_SECONDS = 60 * 60 * 12
@@ -220,6 +231,12 @@ def overview(request: Request) -> dict:
         horse_result_horse_count = (
             session.query(func.count(func.distinct(HorseResult.horse_id))).scalar() or 0
         )
+        jockey_result_jockey_count = (
+            session.query(func.count(func.distinct(JockeyResult.jockey_id))).scalar() or 0
+        )
+        trainer_result_trainer_count = (
+            session.query(func.count(func.distinct(TrainerResult.trainer_id))).scalar() or 0
+        )
         last_collected_at = session.query(func.max(Race.created_at)).scalar()
         upcoming_race_count = (
             session.query(func.count(Race.id))
@@ -256,6 +273,8 @@ def overview(request: Request) -> dict:
             "race_count": race_count,
             "finished_race_count": finished_race_count,
             "horse_result_horse_count": horse_result_horse_count,
+            "jockey_result_jockey_count": jockey_result_jockey_count,
+            "trainer_result_trainer_count": trainer_result_trainer_count,
             "upcoming_race_count": upcoming_race_count,
             "last_collected_at": _iso(last_collected_at),
         },
@@ -481,7 +500,9 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "sex": e.sex,
                 "age": e.age,
                 "jockey": e.jockey,
+                "jockey_id": e.jockey_id,
                 "trainer": e.trainer,
+                "trainer_id": e.trainer_id,
                 "weight": e.weight,
                 "horse_weight": e.horse_weight,
                 "horse_weight_diff": e.horse_weight_diff,
@@ -611,6 +632,112 @@ def horse_detail(horse_id: str) -> dict:
                     "time_seconds": r.time_seconds,
                     "last_3f": r.last_3f,
                     "horse_weight": r.horse_weight,
+                }
+                for r in results
+            ],
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/jockeys/{jockey_id}")
+def jockey_detail(jockey_id: str) -> dict:
+    session = get_session()
+    try:
+        jockey = session.get(Jockey, jockey_id)
+        results = (
+            session.query(JockeyResult)
+            .filter(JockeyResult.jockey_id == jockey_id)
+            .order_by(JockeyResult.race_date.desc().nullslast(), JockeyResult.id.desc())
+            .limit(50)
+            .all()
+        )
+        if jockey is None and not results:
+            entry = session.query(Entry).filter(Entry.jockey_id == jockey_id).first()
+            if entry is None:
+                raise HTTPException(status_code=404, detail="jockey not found")
+            name = entry.jockey
+            results_fetched_at = None
+        else:
+            name = jockey.name if jockey else None
+            results_fetched_at = _iso(jockey.results_fetched_at) if jockey else None
+
+        return {
+            "jockey_id": jockey_id,
+            "name": name,
+            "results_fetched_at": results_fetched_at,
+            "results": [
+                {
+                    "race_key": r.race_key,
+                    "race_date": r.race_date.isoformat() if r.race_date else None,
+                    "venue": r.venue,
+                    "race_name": r.race_name,
+                    "field_size": r.field_size,
+                    "horse_id": r.horse_id,
+                    "horse_name": r.horse_name,
+                    "horse_number": r.horse_number,
+                    "trainer": r.trainer,
+                    "trainer_id": r.trainer_id,
+                    "weight": r.weight,
+                    "odds": r.odds,
+                    "popularity": r.popularity,
+                    "finish_position": r.finish_position,
+                    "distance": r.distance,
+                    "track_type": r.track_type,
+                    "going": r.going,
+                }
+                for r in results
+            ],
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/trainers/{trainer_id}")
+def trainer_detail(trainer_id: str) -> dict:
+    session = get_session()
+    try:
+        trainer = session.get(Trainer, trainer_id)
+        results = (
+            session.query(TrainerResult)
+            .filter(TrainerResult.trainer_id == trainer_id)
+            .order_by(TrainerResult.race_date.desc().nullslast(), TrainerResult.id.desc())
+            .limit(50)
+            .all()
+        )
+        if trainer is None and not results:
+            entry = session.query(Entry).filter(Entry.trainer_id == trainer_id).first()
+            if entry is None:
+                raise HTTPException(status_code=404, detail="trainer not found")
+            name = entry.trainer
+            results_fetched_at = None
+        else:
+            name = trainer.name if trainer else None
+            results_fetched_at = _iso(trainer.results_fetched_at) if trainer else None
+
+        return {
+            "trainer_id": trainer_id,
+            "name": name,
+            "results_fetched_at": results_fetched_at,
+            "results": [
+                {
+                    "race_key": r.race_key,
+                    "race_date": r.race_date.isoformat() if r.race_date else None,
+                    "venue": r.venue,
+                    "race_name": r.race_name,
+                    "field_size": r.field_size,
+                    "horse_id": r.horse_id,
+                    "horse_name": r.horse_name,
+                    "horse_number": r.horse_number,
+                    "jockey": r.jockey,
+                    "jockey_id": r.jockey_id,
+                    "weight": r.weight,
+                    "odds": r.odds,
+                    "popularity": r.popularity,
+                    "finish_position": r.finish_position,
+                    "distance": r.distance,
+                    "track_type": r.track_type,
+                    "going": r.going,
                 }
                 for r in results
             ],
@@ -783,6 +910,14 @@ if WEBUI_DIST.exists():
 
     @app.get("/horses/{horse_id}")
     def horse_page(horse_id: str) -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
+    @app.get("/jockeys/{jockey_id}")
+    def jockey_page(jockey_id: str) -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
+    @app.get("/trainers/{trainer_id}")
+    def trainer_page(trainer_id: str) -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
 
     app.mount("/", StaticFiles(directory=WEBUI_DIST, html=True), name="webui")

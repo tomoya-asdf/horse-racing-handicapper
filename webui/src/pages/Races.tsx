@@ -228,8 +228,34 @@ function RaceDetailView({ raceId }: { raceId: number }) {
                 )}
               </td>
               <td>{formatSexAge(e.sex, e.age)}</td>
-              <td>{e.jockey || "-"}</td>
-              <td>{e.trainer || "-"}</td>
+              <td>
+                {e.jockey_id ? (
+                  <a
+                    className="link-button"
+                    href={`/jockeys/${encodeURIComponent(e.jockey_id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {e.jockey || e.jockey_id}
+                  </a>
+                ) : (
+                  e.jockey || "-"
+                )}
+              </td>
+              <td>
+                {e.trainer_id ? (
+                  <a
+                    className="link-button"
+                    href={`/trainers/${encodeURIComponent(e.trainer_id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {e.trainer || e.trainer_id}
+                  </a>
+                ) : (
+                  e.trainer || "-"
+                )}
+              </td>
               <td>{e.weight ?? "-"}</td>
               <td>{formatHorseWeight(e.horse_weight, e.horse_weight_diff)}</td>
               <td>{e.odds ?? "-"}</td>

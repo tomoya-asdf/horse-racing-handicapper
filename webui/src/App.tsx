@@ -7,6 +7,7 @@ import BetsPage from "./pages/Bets";
 import JobsPage from "./pages/Jobs";
 import SettingsPage from "./pages/Settings";
 import HorsePage from "./pages/Horse";
+import PersonPage from "./pages/Person";
 import type { AuthStatus } from "./types";
 
 const TABS = [
@@ -88,6 +89,11 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   const horseMatch = window.location.pathname.match(/^\/horses\/([^/]+)$/);
   const horseId = horseMatch ? decodeURIComponent(horseMatch[1]) : null;
+  const jockeyMatch = window.location.pathname.match(/^\/jockeys\/([^/]+)$/);
+  const jockeyId = jockeyMatch ? decodeURIComponent(jockeyMatch[1]) : null;
+  const trainerMatch = window.location.pathname.match(/^\/trainers\/([^/]+)$/);
+  const trainerId = trainerMatch ? decodeURIComponent(trainerMatch[1]) : null;
+  const detailPageOpen = Boolean(horseId || jockeyId || trainerId);
   const visibleTabs = TABS.filter((t) => !t.adminOnly || auth?.authenticated);
 
   useEffect(() => {
@@ -118,7 +124,7 @@ export default function App() {
 
   return (
     <div className="app">
-      {!horseId && <header className="header">
+      {!detailPageOpen && <header className="header">
         <h1>
           競馬予測AI <span className="header-sub">管理コンソール</span>
         </h1>
@@ -161,11 +167,13 @@ export default function App() {
           />
         )}
         {!showLogin && horseId && <HorsePage horseId={horseId} />}
-        {!showLogin && !horseId && tab === "overview" && <OverviewPage auth={auth} />}
-        {!showLogin && !horseId && tab === "races" && <RacesPage />}
-        {!showLogin && !horseId && tab === "bets" && <BetsPage auth={auth} />}
-        {!showLogin && !horseId && auth?.authenticated && tab === "jobs" && <JobsPage />}
-        {!showLogin && !horseId && auth?.authenticated && tab === "settings" && <SettingsPage />}
+        {!showLogin && jockeyId && <PersonPage kind="jockey" personId={jockeyId} />}
+        {!showLogin && trainerId && <PersonPage kind="trainer" personId={trainerId} />}
+        {!showLogin && !detailPageOpen && tab === "overview" && <OverviewPage auth={auth} />}
+        {!showLogin && !detailPageOpen && tab === "races" && <RacesPage />}
+        {!showLogin && !detailPageOpen && tab === "bets" && <BetsPage auth={auth} />}
+        {!showLogin && !detailPageOpen && auth?.authenticated && tab === "jobs" && <JobsPage />}
+        {!showLogin && !detailPageOpen && auth?.authenticated && tab === "settings" && <SettingsPage />}
       </main>
     </div>
   );

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from src.predictor.history import HISTORY_FEATURES
+from src.predictor.history import HISTORY_FEATURES, JOCKEY_HISTORY_FEATURES, TRAINER_HISTORY_FEATURES
 
 # 基礎特徴量(レース当日の出馬表から分かるもの。オッズ・人気は使わない)
 # age=馬齢, horse_weight=馬体重, horse_weight_diff=前走比増減, season_sin/cos=季節(周期)
@@ -19,7 +19,13 @@ BASE_NUMERIC_FEATURES = [
 # カテゴリ特徴量: 性別・騎手ID・調教師ID(いずれも同姓同名対策にID)・父ID(血統=距離/芝ダ適性の遺伝)
 CATEGORICAL_FEATURES = ["sex", "jockey_id", "trainer_id", "sire_id"]
 # モデルに渡す全特徴量(基礎 + カテゴリ + 馬の過去成績ベースの履歴特徴量)
-FEATURE_COLUMNS = BASE_NUMERIC_FEATURES + CATEGORICAL_FEATURES + HISTORY_FEATURES
+FEATURE_COLUMNS = (
+    BASE_NUMERIC_FEATURES
+    + CATEGORICAL_FEATURES
+    + HISTORY_FEATURES
+    + JOCKEY_HISTORY_FEATURES
+    + TRAINER_HISTORY_FEATURES
+)
 
 DEFAULT_WEIGHT = 55.0
 DEFAULT_SEX = "unknown"
@@ -67,6 +73,8 @@ def build_features(entries: pd.DataFrame) -> pd.DataFrame:
     df["trainer_id"] = _categorical("trainer_id", DEFAULT_TRAINER_ID)
     df["sire_id"] = _categorical("sire_id", DEFAULT_SIRE_ID)
     for column in HISTORY_FEATURES:
+        df[column] = _numeric(column)
+    for column in JOCKEY_HISTORY_FEATURES + TRAINER_HISTORY_FEATURES:
         df[column] = _numeric(column)
 
     return df[FEATURE_COLUMNS]

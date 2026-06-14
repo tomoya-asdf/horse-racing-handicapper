@@ -20,7 +20,13 @@ from src.common.db import get_session, init_db
 from src.common.models import Entry, Race
 from src.common.paths import MODEL_PATH
 from src.predictor.features import CATEGORICAL_FEATURES, FEATURE_COLUMNS, build_features
-from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
+from src.predictor.history import (
+    build_entries_frame,
+    load_horse_history,
+    load_jockey_history,
+    load_sire_map,
+    load_trainer_history,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,6 +68,8 @@ def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame
         # 履歴特徴量を作る(history側で日付フィルタしリークを防ぐ)
         history = load_horse_history(session)
         sire_map = load_sire_map(session)
+        jockey_history = load_jockey_history(session)
+        trainer_history = load_trainer_history(session)
 
         frames: list[pd.DataFrame] = []
         for race in races:
@@ -69,7 +77,9 @@ def _load_training_frames(before: date | None = None) -> tuple[list[pd.DataFrame
             if len(entries) < 2:
                 continue
 
-            entries_df = build_entries_frame(entries, race, history, sire_map)
+            entries_df = build_entries_frame(
+                entries, race, history, sire_map, jockey_history, trainer_history
+            )
             features = build_features(entries_df)
             features["label"] = pd.Series(
                 {e.id: int(e.finish_position == 1) for e in entries}

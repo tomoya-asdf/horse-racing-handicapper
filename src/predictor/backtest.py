@@ -31,7 +31,13 @@ from src.common.models import Entry, Race
 from src.predictor import model as model_module
 from src.predictor.betting import decide_bets
 from src.predictor.features import build_features
-from src.predictor.history import build_entries_frame, load_horse_history, load_sire_map
+from src.predictor.history import (
+    build_entries_frame,
+    load_horse_history,
+    load_jockey_history,
+    load_sire_map,
+    load_trainer_history,
+)
 from src.predictor.train import _load_training_frames, build_model_bundle
 
 logger = logging.getLogger(__name__)
@@ -111,6 +117,8 @@ def run_backtest(start: date, end: date, config: BettingConfig | None = None) ->
 
         history = load_horse_history(session)
         sire_map = load_sire_map(session)
+        jockey_history = load_jockey_history(session)
+        trainer_history = load_trainer_history(session)
         races = (
             session.query(Race)
             .filter(
@@ -128,7 +136,17 @@ def run_backtest(start: date, end: date, config: BettingConfig | None = None) ->
             if len(entries) < 2:
                 continue
             scores = model_module.predict(
-                bundle, build_features(build_entries_frame(entries, race, history, sire_map))
+                bundle,
+                build_features(
+                    build_entries_frame(
+                        entries,
+                        race,
+                        history,
+                        sire_map,
+                        jockey_history,
+                        trainer_history,
+                    )
+                ),
             )
             preds = [_Pred(entry_id=int(eid), score=float(score)) for eid, score in scores.items()]
             # 馬連の評価用に確定済みレースの最終馬連オッズを取得する

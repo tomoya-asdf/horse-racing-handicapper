@@ -4,6 +4,16 @@ import { ErrorNote, StatusBadge, usePolling } from "../components";
 import type { JobsResponse } from "../types";
 
 const JOB_BUTTONS = [
+  {
+    name: "collect_jockeys",
+    label: "騎手過去戦績収集",
+    description: "出走騎手の過去戦績を補完",
+  },
+  {
+    name: "collect_trainers",
+    label: "調教師過去戦績収集",
+    description: "出走馬の調教師の過去戦績を補完",
+  },
   { name: "collect", label: "データ収集", description: "レース、出馬表、オッズ、結果を取得" },
   {
     name: "collect_horses",

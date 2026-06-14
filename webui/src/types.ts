@@ -42,16 +42,22 @@ export interface SettingsView {
     schedule_bet_decide_enabled: boolean;
     schedule_settle_enabled: boolean;
     schedule_collect_horses_enabled: boolean;
+    schedule_collect_jockeys_enabled: boolean;
+    schedule_collect_trainers_enabled: boolean;
     schedule_train_enabled: boolean;
     schedule_collect_interval_minutes: number;
     schedule_predict_interval_minutes: number;
     schedule_collect_horses_interval_minutes: number;
+    schedule_collect_jockeys_interval_minutes: number;
+    schedule_collect_trainers_interval_minutes: number;
     schedule_train_interval_minutes: number;
     schedule_bet_decide_before_start_minutes: number;
     schedule_settle_after_start_minutes: number;
     schedule_collect_days: string;
     schedule_predict_days: string;
     schedule_collect_horses_days: string;
+    schedule_collect_jockeys_days: string;
+    schedule_collect_trainers_days: string;
     schedule_train_days: string;
     schedule_bet_decide_days: string;
     schedule_settle_days: string;
@@ -95,6 +101,8 @@ export interface Overview {
     race_count: number;
     finished_race_count: number;
     horse_result_horse_count: number;
+    jockey_result_jockey_count: number;
+    trainer_result_trainer_count: number;
     upcoming_race_count: number;
     last_collected_at: string | null;
   };
@@ -145,7 +153,9 @@ export interface RaceEntry {
   sex: string | null;
   age: number | null;
   jockey: string | null;
+  jockey_id: string | null;
   trainer: string | null;
+  trainer_id: string | null;
   weight: number | null;
   horse_weight: number | null;
   horse_weight_diff: number | null;
@@ -238,6 +248,42 @@ export interface HorseDetail {
   sire_name: string | null;
   results_fetched_at: string | null;
   results: HorseResult[];
+}
+
+export interface PersonResult {
+  race_key: string | null;
+  race_date: string | null;
+  venue: string | null;
+  race_name: string | null;
+  field_size: number | null;
+  horse_id: string | null;
+  horse_name: string | null;
+  horse_number: number | null;
+  jockey?: string | null;
+  jockey_id?: string | null;
+  trainer?: string | null;
+  trainer_id?: string | null;
+  weight: number | null;
+  odds: number | null;
+  popularity: number | null;
+  finish_position: number | null;
+  distance: number | null;
+  track_type: string | null;
+  going: string | null;
+}
+
+export interface JockeyDetail {
+  jockey_id: string;
+  name: string | null;
+  results_fetched_at: string | null;
+  results: PersonResult[];
+}
+
+export interface TrainerDetail {
+  trainer_id: string;
+  name: string | null;
+  results_fetched_at: string | null;
+  results: PersonResult[];
 }
 
 export interface BetItem {

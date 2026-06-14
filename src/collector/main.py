@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -8,7 +8,16 @@ from src.common import jobs
 from src.common.config import settings
 from src.common.db import get_session, init_db
 from src.common.dynamic_config import load_scheduled_job_config
-from src.common.models import Entry, Horse, HorseResult, Race
+from src.common.models import (
+    Entry,
+    Horse,
+    HorseResult,
+    Jockey,
+    JockeyResult,
+    Race,
+    Trainer,
+    TrainerResult,
+)
 from src.common.timeutils import now_jst
 
 logging.basicConfig(level=logging.INFO)
@@ -238,36 +247,128 @@ def _update_horse_results(limit: int) -> int:
     return _fetch_and_store_horse_results(horse_ids, sire_known)
 
 
-def update_horse_results_for_race_dates(start: date, end: date, limit: int | None = None) -> int:
-    """Backfill後のモデル学習用に、期間内に出走した馬の過去戦績と血統を補完する。"""
-    stale_before = now_jst() - timedelta(days=settings.HORSE_RESULTS_REFRESH_DAYS)
+def _upsert_jockey_results(session, jockey_id: str, name: str | None, results: list[dict]) -> None:
+    session.query(JockeyResult).filter(JockeyResult.jockey_id == jockey_id).delete()
+    seen_keys: set[tuple[str | None, str | None]] = set()
+    for row in results:
+        key = (row.get("race_key"), row.get("horse_id"))
+        if key[0] is not None and key in seen_keys:
+            continue
+        seen_keys.add(key)
+        session.add(JockeyResult(jockey_id=jockey_id, **row))
+
+    jockey = session.get(Jockey, jockey_id)
+    if jockey is None:
+        jockey = Jockey(jockey_id=jockey_id)
+        session.add(jockey)
+    if name:
+        jockey.name = name
+    jockey.results_fetched_at = now_jst()
+
+
+def _upsert_trainer_results(session, trainer_id: str, name: str | None, results: list[dict]) -> None:
+    session.query(TrainerResult).filter(TrainerResult.trainer_id == trainer_id).delete()
+    seen_keys: set[tuple[str | None, str | None]] = set()
+    for row in results:
+        key = (row.get("race_key"), row.get("horse_id"))
+        if key[0] is not None and key in seen_keys:
+            continue
+        seen_keys.add(key)
+        session.add(TrainerResult(trainer_id=trainer_id, **row))
+
+    trainer = session.get(Trainer, trainer_id)
+    if trainer is None:
+        trainer = Trainer(trainer_id=trainer_id)
+        session.add(trainer)
+    if name:
+        trainer.name = name
+    trainer.results_fetched_at = now_jst()
+
+
+def _jockey_ids_to_fetch(session, limit: int) -> list[str]:
+    stale_before = now_jst() - timedelta(days=settings.JOCKEY_RESULTS_REFRESH_DAYS)
+    rows = (
+        session.query(Entry.jockey_id)
+        .outerjoin(Jockey, Jockey.jockey_id == Entry.jockey_id)
+        .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
+        .filter((Jockey.jockey_id.is_(None)) | (Jockey.results_fetched_at < stale_before))
+        .distinct()
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def _trainer_ids_to_fetch(session, limit: int) -> list[str]:
+    stale_before = now_jst() - timedelta(days=settings.TRAINER_RESULTS_REFRESH_DAYS)
+    rows = (
+        session.query(Entry.trainer_id)
+        .outerjoin(Trainer, Trainer.trainer_id == Entry.trainer_id)
+        .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
+        .filter((Trainer.trainer_id.is_(None)) | (Trainer.results_fetched_at < stale_before))
+        .distinct()
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def _update_jockey_results(limit: int) -> int:
+    if limit <= 0:
+        return 0
     session = get_session()
     try:
-        query = (
-            session.query(Entry.horse_id)
-            .join(Race, Race.id == Entry.race_id)
-            .outerjoin(Horse, Horse.horse_id == Entry.horse_id)
-            .filter(Race.race_date >= start, Race.race_date <= end)
-            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
-            .filter(
-                (Horse.horse_id.is_(None))
-                | (Horse.results_fetched_at.is_(None))
-                | (Horse.results_fetched_at < stale_before)
-            )
-            .distinct()
-        )
-        if limit is not None:
-            if limit <= 0:
-                return 0
-            query = query.limit(limit)
-        rows = query.all()
-        horse_ids = [row[0] for row in rows]
-        sire_known = _known_sire_ids(session, horse_ids)
+        jockey_ids = _jockey_ids_to_fetch(session, limit)
     finally:
         session.close()
 
-    logger.info("backfill horse result targets: %d horses", len(horse_ids))
-    return _fetch_and_store_horse_results(horse_ids, sire_known)
+    fetched = 0
+    for jockey_id in jockey_ids:
+        try:
+            data = scraper.fetch_jockey_results(jockey_id)
+        except Exception as exc:
+            logger.warning("failed to fetch jockey results jockey_id=%s: %s", jockey_id, exc)
+            continue
+        session = get_session()
+        try:
+            _upsert_jockey_results(session, jockey_id, data["name"], data["results"])
+            session.commit()
+            fetched += 1
+        except Exception:
+            session.rollback()
+            logger.exception("failed to upsert jockey results jockey_id=%s", jockey_id)
+        finally:
+            session.close()
+    return fetched
+
+
+def _update_trainer_results(limit: int) -> int:
+    if limit <= 0:
+        return 0
+    session = get_session()
+    try:
+        trainer_ids = _trainer_ids_to_fetch(session, limit)
+    finally:
+        session.close()
+
+    fetched = 0
+    for trainer_id in trainer_ids:
+        try:
+            data = scraper.fetch_trainer_results(trainer_id)
+        except Exception as exc:
+            logger.warning("failed to fetch trainer results trainer_id=%s: %s", trainer_id, exc)
+            continue
+        session = get_session()
+        try:
+            _upsert_trainer_results(session, trainer_id, data["name"], data["results"])
+            session.commit()
+            fetched += 1
+        except Exception:
+            session.rollback()
+            logger.exception("failed to upsert trainer results trainer_id=%s", trainer_id)
+        finally:
+            session.close()
+    return fetched
 
 
 def _run_collect(params: dict) -> str:
@@ -280,19 +381,18 @@ def _run_collect(params: dict) -> str:
         _upsert_races(races)
         total += len(races)
     updated = _update_finished_results()
-    horses = _update_horse_results(settings.HORSE_RESULTS_PER_RUN)
     return (
         f"取得レース={total}件"
         f"({today}〜{today + timedelta(days=settings.COLLECT_DAYS_AHEAD)}), "
-        f"結果反映={updated}件, 馬成績収集={horses}頭"
+        f"結果反映={updated}件"
     )
 
 
 def _run_collect_horses(params: dict) -> str:
     """馬の過去成績だけをまとめて収集する手動ジョブ。
 
-    定期収集(collect)でも少しずつ収集するが、初回の埋め込みを早めたいときに
-    手動で繰り返し実行する用。1回の上限はparamsのlimit、無ければ既定の5倍。
+    レース収集やバックフィルでは馬過去成績を取得しないため、このジョブでまとめて収集する。
+    1回の上限はparamsのlimit、無ければ既定の5倍。
     """
     default_limit = settings.HORSE_RESULTS_PER_RUN * 5
     try:
@@ -301,6 +401,26 @@ def _run_collect_horses(params: dict) -> str:
         limit = default_limit
     fetched = _update_horse_results(limit)
     return f"馬の過去成績を{fetched}頭分収集しました(上限{limit}頭)"
+
+
+def _run_collect_jockeys(params: dict) -> str:
+    default_limit = settings.JOCKEY_RESULTS_PER_RUN * 5
+    try:
+        limit = int(params.get("limit", default_limit)) if params else default_limit
+    except (TypeError, ValueError):
+        limit = default_limit
+    fetched = _update_jockey_results(limit)
+    return f"騎手の過去戦績を{fetched}人分収集しました(上限{limit}人)"
+
+
+def _run_collect_trainers(params: dict) -> str:
+    default_limit = settings.TRAINER_RESULTS_PER_RUN * 5
+    try:
+        limit = int(params.get("limit", default_limit)) if params else default_limit
+    except (TypeError, ValueError):
+        limit = default_limit
+    fetched = _update_trainer_results(limit)
+    return f"調教師の過去戦績を{fetched}人分収集しました(上限{limit}人)"
 
 
 def _run_backfill(params: dict) -> str:
@@ -336,28 +456,64 @@ def _scheduled_collect_horses() -> None:
     jobs.run_scheduled(jobs.COLLECT_HORSES, _run_collect_horses)
 
 
+def _scheduled_collect_jockeys() -> None:
+    config = load_scheduled_job_config(jobs.COLLECT_JOCKEYS)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(
+        jobs.COLLECT_JOCKEYS, config.interval_minutes, weekdays=config.weekdays
+    ):
+        return
+    jobs.run_scheduled(jobs.COLLECT_JOCKEYS, _run_collect_jockeys)
+
+
+def _scheduled_collect_trainers() -> None:
+    config = load_scheduled_job_config(jobs.COLLECT_TRAINERS)
+    if config is None or not config.enabled:
+        return
+    if not jobs.scheduled_run_due(
+        jobs.COLLECT_TRAINERS, config.interval_minutes, weekdays=config.weekdays
+    ):
+        return
+    jobs.run_scheduled(jobs.COLLECT_TRAINERS, _run_collect_trainers)
+
+
 def _poll_queued_jobs() -> None:
     jobs.process_queued(
         {
             jobs.COLLECT: _run_collect,
             jobs.BACKFILL: _run_backfill,
             jobs.COLLECT_HORSES: _run_collect_horses,
+            jobs.COLLECT_JOCKEYS: _run_collect_jockeys,
+            jobs.COLLECT_TRAINERS: _run_collect_trainers,
         }
     )
 
 
 def main() -> None:
     init_db()
-    jobs.recover_stale([jobs.COLLECT, jobs.BACKFILL, jobs.COLLECT_HORSES])
+    jobs.recover_stale(
+        [
+            jobs.COLLECT,
+            jobs.BACKFILL,
+            jobs.COLLECT_HORSES,
+            jobs.COLLECT_JOCKEYS,
+            jobs.COLLECT_TRAINERS,
+        ]
+    )
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(_scheduled_collect, "interval", minutes=1)
     scheduler.add_job(_scheduled_collect_horses, "interval", minutes=1)
+    scheduler.add_job(_scheduled_collect_jockeys, "interval", minutes=1)
+    scheduler.add_job(_scheduled_collect_trainers, "interval", minutes=1)
     scheduler.add_job(
         _poll_queued_jobs, "interval", seconds=jobs.POLL_INTERVAL_SECONDS
     )
     logger.info("collector started: interval=%s min", settings.COLLECT_INTERVAL_MINUTES)
     _scheduled_collect()
     _scheduled_collect_horses()
+    _scheduled_collect_jockeys()
+    _scheduled_collect_trainers()
     scheduler.start()
 
 

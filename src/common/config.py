@@ -19,6 +19,12 @@ class Settings:
     COLLECT_HORSES_INTERVAL_MINUTES: int = int(
         os.environ.get("COLLECT_HORSES_INTERVAL_MINUTES", "43200")
     )
+    COLLECT_JOCKEYS_INTERVAL_MINUTES: int = int(
+        os.environ.get("COLLECT_JOCKEYS_INTERVAL_MINUTES", "43200")
+    )
+    COLLECT_TRAINERS_INTERVAL_MINUTES: int = int(
+        os.environ.get("COLLECT_TRAINERS_INTERVAL_MINUTES", "43200")
+    )
     TRAIN_INTERVAL_MINUTES: int = int(os.environ.get("TRAIN_INTERVAL_MINUTES", "43200"))
 
     # 何日先のレースまで収集するか。JRAは主に土日開催のため、平日でも
@@ -46,9 +52,10 @@ class Settings:
     # 古い取得済みの馬は最新走を取り込むため再取得する。
     HORSE_RESULTS_PER_RUN: int = int(os.environ.get("HORSE_RESULTS_PER_RUN", "30"))
     HORSE_RESULTS_REFRESH_DAYS: int = int(os.environ.get("HORSE_RESULTS_REFRESH_DAYS", "30"))
-    BACKFILL_HORSE_RESULTS_LIMIT: int = int(
-        os.environ.get("BACKFILL_HORSE_RESULTS_LIMIT", "300")
-    )
+    JOCKEY_RESULTS_PER_RUN: int = int(os.environ.get("JOCKEY_RESULTS_PER_RUN", "30"))
+    JOCKEY_RESULTS_REFRESH_DAYS: int = int(os.environ.get("JOCKEY_RESULTS_REFRESH_DAYS", "30"))
+    TRAINER_RESULTS_PER_RUN: int = int(os.environ.get("TRAINER_RESULTS_PER_RUN", "30"))
+    TRAINER_RESULTS_REFRESH_DAYS: int = int(os.environ.get("TRAINER_RESULTS_REFRESH_DAYS", "30"))
 
     # IPAT (JRA即時購入) 自動操作
     IPAT_SUBSCRIBER_NUMBER: str = os.environ.get("IPAT_SUBSCRIBER_NUMBER", "")

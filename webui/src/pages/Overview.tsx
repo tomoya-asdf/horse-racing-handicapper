@@ -101,6 +101,14 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
               <span>{data.data.horse_result_horse_count.toLocaleString()} 頭</span>
             </div>
             <div>
+              <span>戦績取得済み騎手</span>
+              <span>{data.data.jockey_result_jockey_count.toLocaleString()} 人</span>
+            </div>
+            <div>
+              <span>戦績取得済み調教師</span>
+              <span>{data.data.trainer_result_trainer_count.toLocaleString()} 人</span>
+            </div>
+            <div>
               <span>発走前レース</span>
               <span>{data.data.upcoming_race_count} 件</span>
             </div>

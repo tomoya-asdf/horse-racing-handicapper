@@ -855,6 +855,130 @@ def fetch_horse_results(horse_id: str) -> dict:
     return {"horse_id": horse_id, "name": name, "results": results}
 
 
+def _parse_profile_name(soup: BeautifulSoup) -> str | None:
+    h1 = soup.find("h1")
+    if h1 is not None:
+        name = h1.get_text(" ", strip=True)
+        return name or None
+    title = soup.find("title")
+    if title is not None:
+        return title.get_text(" ", strip=True).split("|")[0].strip() or None
+    return None
+
+
+def _find_person_results_table(soup: BeautifulSoup):
+    for table in soup.find_all("table"):
+        header_cells = [c.get_text(strip=True) for c in table.find_all("th")]
+        if "日付" in header_cells and "着順" in header_cells and "馬名" in header_cells:
+            return table
+    return None
+
+
+def _cell_by_header(headers: list[str], cells, *names: str):
+    for name in names:
+        if name in headers:
+            idx = headers.index(name)
+            if idx < len(cells):
+                return cells[idx]
+    return None
+
+
+def _cell_text(headers: list[str], cells, *names: str) -> str:
+    cell = _cell_by_header(headers, cells, *names)
+    return cell.get_text(strip=True) if cell is not None else ""
+
+
+def _parse_person_result_row(headers: list[str], cells, person_type: str) -> dict:
+    race_cell = _cell_by_header(headers, cells, "レース名", "レース")
+    horse_cell = _cell_by_header(headers, cells, "馬名")
+    jockey_cell = _cell_by_header(headers, cells, "騎手")
+    trainer_cell = _cell_by_header(headers, cells, "厩舎", "調教師")
+
+    race_key = None
+    if race_cell is not None:
+        link = race_cell.find("a")
+        if link is not None:
+            match = _RACE_KEY_RE.search(link.get("href", ""))
+            race_key = match.group(1) if match else None
+
+    horse_id = None
+    if horse_cell is not None:
+        link = horse_cell.find("a")
+        if link is not None:
+            horse_id = _parse_horse_id(link.get("href"))
+
+    track_type, distance = _parse_distance(_cell_text(headers, cells, "距離"))
+    finish_text = _cell_text(headers, cells, "着順")
+    row = {
+        "race_key": race_key,
+        "race_date": _parse_date_cell(_cell_text(headers, cells, "日付")),
+        "venue": _cell_text(headers, cells, "開催") or None,
+        "race_name": _cell_text(headers, cells, "レース名", "レース") or None,
+        "field_size": _parse_int_cell(_cell_text(headers, cells, "頭数")),
+        "horse_id": horse_id,
+        "horse_name": _cell_text(headers, cells, "馬名") or None,
+        "horse_number": _parse_int_cell(_cell_text(headers, cells, "馬番")),
+        "weight": _parse_float_cell(_cell_text(headers, cells, "斤量")),
+        "odds": _parse_float_cell(_cell_text(headers, cells, "オッズ")),
+        "popularity": _parse_int_cell(_cell_text(headers, cells, "人気")),
+        "finish_position": int(finish_text) if finish_text.isdigit() else None,
+        "distance": distance,
+        "track_type": track_type,
+        "going": _cell_text(headers, cells, "馬場") or None,
+    }
+    if person_type == "jockey":
+        trainer_id = None
+        if trainer_cell is not None:
+            link = trainer_cell.find("a")
+            if link is not None:
+                trainer_id = _parse_trainer_id(link.get("href"))
+        row.update(
+            {
+                "trainer": _cell_text(headers, cells, "厩舎", "調教師") or None,
+                "trainer_id": trainer_id,
+            }
+        )
+    else:
+        jockey_id = None
+        if jockey_cell is not None:
+            link = jockey_cell.find("a")
+            if link is not None:
+                jockey_id = _parse_jockey_id(link.get("href"))
+        row.update(
+            {
+                "jockey": _cell_text(headers, cells, "騎手") or None,
+                "jockey_id": jockey_id,
+            }
+        )
+    return row
+
+
+def _fetch_person_results(person_type: str, person_id: str) -> dict:
+    response = _get(f"{DB_BASE_URL}/{person_type}/result/recent/{person_id}/")
+    soup = BeautifulSoup(response.text, "html.parser")
+    table = _find_person_results_table(soup)
+    results: list[dict] = []
+    if table is not None:
+        header_row = table.find("tr")
+        headers = [c.get_text(strip=True) for c in header_row.find_all(["th", "td"])]
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if not cells:
+                continue
+            results.append(_parse_person_result_row(headers, cells, person_type))
+    else:
+        logger.warning("%s results table not found for id=%s", person_type, person_id)
+    return {"id": person_id, "name": _parse_profile_name(soup), "results": results}
+
+
+def fetch_jockey_results(jockey_id: str) -> dict:
+    return _fetch_person_results("jockey", jockey_id)
+
+
+def fetch_trainer_results(trainer_id: str) -> dict:
+    return _fetch_person_results("trainer", trainer_id)
+
+
 # 血統表(/horse/ped/{id}/)の馬IDリンク。ped/sire等の短い語ではなく10桁前後のIDだけを拾う
 _PED_HORSE_ID_RE = re.compile(r"/horse/([0-9a-z]{8,})/")
 
