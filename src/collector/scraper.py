@@ -12,6 +12,7 @@ import logging
 import re
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import date, datetime
 from datetime import time as dt_time
 
@@ -49,6 +50,67 @@ VENUE_CODES = {
 _session = requests.Session()
 _session.headers.update({"User-Agent": USER_AGENT})
 
+
+@dataclass
+class ScrapeMetrics:
+    http_requests: int = 0
+    playwright_pages: int = 0
+    playwright_browser_starts: int = 0
+
+
+_metrics = ScrapeMetrics()
+
+
+def _metrics_snapshot() -> ScrapeMetrics:
+    return ScrapeMetrics(
+        http_requests=_metrics.http_requests,
+        playwright_pages=_metrics.playwright_pages,
+        playwright_browser_starts=_metrics.playwright_browser_starts,
+    )
+
+
+def _metrics_delta(start: ScrapeMetrics) -> ScrapeMetrics:
+    return ScrapeMetrics(
+        http_requests=_metrics.http_requests - start.http_requests,
+        playwright_pages=_metrics.playwright_pages - start.playwright_pages,
+        playwright_browser_starts=_metrics.playwright_browser_starts
+        - start.playwright_browser_starts,
+    )
+
+
+def _log_metrics(label: str, started_at: float, start: ScrapeMetrics) -> None:
+    delta = _metrics_delta(start)
+    logger.info(
+        "%s: elapsed=%.1fs, http_requests=%d, playwright_pages=%d, playwright_browser_starts=%d",
+        label,
+        time.perf_counter() - started_at,
+        delta.http_requests,
+        delta.playwright_pages,
+        delta.playwright_browser_starts,
+    )
+
+
+class NetkeibaHttpClient:
+    def __init__(self) -> None:
+        self.session = _session
+
+    def get(self, url: str, **kwargs) -> requests.Response:
+        response = self.session.get(url, timeout=10, **kwargs)
+        _metrics.http_requests += 1
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type and not re.search(r"charset=[\w-]", content_type):
+            # netkeibaは「Content-Type: text/html; charset=」とcharsetを空で返す。
+            # このときrequestsはencoding=""(不明)のままUTF-8で強制デコードして
+            # 文字化けする。さらにページによりUTF-8(レース一覧)とEUC-JP(出馬表・
+            # 結果)が混在するため、決め打ちせず内容から自動判定する
+            response.encoding = response.apparent_encoding
+        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
+        return response
+
+
+_http = NetkeibaHttpClient()
+
 BET_TYPE_WIN = "単勝"
 BET_TYPE_PLACE = "複勝"
 BET_TYPE_QUINELLA = "馬連"
@@ -63,17 +125,7 @@ JRA_ODDS_TYPES = {
 
 
 def _get(url: str, **kwargs) -> requests.Response:
-    response = _session.get(url, timeout=10, **kwargs)
-    response.raise_for_status()
-    content_type = response.headers.get("Content-Type", "").lower()
-    if "text/html" in content_type and not re.search(r"charset=[\w-]", content_type):
-        # netkeibaは「Content-Type: text/html; charset=」とcharsetを空で返す。
-        # このときrequestsはencoding=""(不明)のままUTF-8で強制デコードして
-        # 文字化けする。さらにページによりUTF-8(レース一覧)とEUC-JP(出馬表・
-        # 結果)が混在するため、決め打ちせず内容から自動判定する
-        response.encoding = response.apparent_encoding
-    time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
-    return response
+    return _http.get(url, **kwargs)
 
 
 def parse_race_key(race_key: str) -> dict:
@@ -398,6 +450,47 @@ def _new_rendered_page(browser):
     return page
 
 
+class RenderedOddsClient:
+    def __init__(self) -> None:
+        self._playwright = None
+        self._browser = None
+        self._page = None
+
+    def open(self) -> None:
+        if self._page is not None:
+            return
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+        _metrics.playwright_browser_starts += 1
+        self._page = _new_rendered_page(self._browser)
+
+    def fetch_win_odds(self, race_id: str) -> dict[int, dict[str, float | int]]:
+        self.open()
+        _metrics.playwright_pages += 1
+        try:
+            return _read_rendered_win_odds(self._page, race_id)
+        finally:
+            time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
+
+    def close(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            self._playwright.stop()
+            self._playwright = None
+        self._page = None
+
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
 def _fetch_rendered_win_odds(race_id: str) -> dict[int, dict[str, float | int]]:
     """Use a real browser to read pre-race odds/popularity after netkeiba JS updates the page.
 
@@ -405,24 +498,14 @@ def _fetch_rendered_win_odds(race_id: str) -> dict[int, dict[str, float | int]]:
     races where the static HTML/API does not expose values that are visible in a browser.
     """
     try:
-        from playwright.sync_api import sync_playwright
+        with RenderedOddsClient() as client:
+            return client.fetch_win_odds(race_id)
     except ImportError:
         logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
         return {}
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-            try:
-                page = _new_rendered_page(browser)
-                return _read_rendered_win_odds(page, race_id)
-            finally:
-                browser.close()
     except Exception as exc:
         logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
         return {}
-    finally:
-        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
 
 
 def _parse_entry_rows(soup: BeautifulSoup) -> list[dict]:
@@ -618,11 +701,11 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
     (``include_started=True`` の場合は除外しない。過去レースのバックフィル用。
     過去レースでもオッズAPIは最終オッズを返す)。
     """
+    metrics_start = _metrics_snapshot()
+    started_at = time.perf_counter()
     now = now_jst()
     races: list[dict] = []
-    playwright = None
-    browser = None
-    page = None
+    rendered_client: RenderedOddsClient | None = None
 
     try:
         for race_id in _find_race_ids(target_date):
@@ -653,14 +736,9 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
                 if _needs_rendered_odds(entries):
                     rendered_odds = {}
                     try:
-                        if page is None:
-                            from playwright.sync_api import sync_playwright
-
-                            playwright = sync_playwright().start()
-                            browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-                            page = _new_rendered_page(browser)
-                        rendered_odds = _read_rendered_win_odds(page, race_id)
-                        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
+                        if rendered_client is None:
+                            rendered_client = RenderedOddsClient()
+                        rendered_odds = rendered_client.fetch_win_odds(race_id)
                     except ImportError:
                         logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
                     except Exception as exc:
@@ -692,10 +770,13 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
                 logger.warning("failed to fetch race_id=%s: %s", race_id, exc)
                 continue
     finally:
-        if browser is not None:
-            browser.close()
-        if playwright is not None:
-            playwright.stop()
+        if rendered_client is not None:
+            rendered_client.close()
+        _log_metrics(
+            f"fetch_upcoming_races date={target_date} include_started={include_started} races={len(races)}",
+            started_at,
+            metrics_start,
+        )
 
     return races
 
