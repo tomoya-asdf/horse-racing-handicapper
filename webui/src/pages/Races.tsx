@@ -115,6 +115,10 @@ function formatPopularity(value: number | null): string {
   return value ? `${value}人気` : "-";
 }
 
+function raceStatusLabel(finished: boolean): string {
+  return finished ? "確定" : "未確定";
+}
+
 function formatSexAge(sex: string | null, age: number | null): string {
   const s = sex ?? "";
   const a = age != null ? String(age) : "";
@@ -207,7 +211,6 @@ function RaceDetailView({ raceId }: { raceId: number }) {
         <summary>買い目候補</summary>
         <div className="bet-candidates-header">
           <div>
-            <h4>買い目候補</h4>
             <p className="muted">単勝・複勝・馬連・ワイドを期待値順に比較</p>
           </div>
         </div>
@@ -389,7 +392,11 @@ function RaceRow({
         <td>{race.race_name || "-"}</td>
         <td>{formatFullDateTime(race.start_time)}</td>
         <td>{race.entry_count}</td>
-        <td>{race.finished ? "確定" : "未確定"}</td>
+        <td>
+          <span className={`race-status ${race.finished ? "finished" : "unfinished"}`}>
+            {raceStatusLabel(race.finished)}
+          </span>
+        </td>
         <td>
           {race.top_prediction
             ? `${race.top_prediction.horse_number}番 ${
@@ -446,7 +453,6 @@ export default function RacesPage() {
   const canGoPrev = page > 0;
   const canGoNext = data ? data.offset + rowCount < total : false;
   const lastPage = total > 0 ? Math.floor((total - 1) / PAGE_SIZE) : 0;
-  const hasFilters = Object.values(filters).some(Boolean);
 
   const changePage = (nextPage: number) => {
     setOpenId(null);
@@ -502,12 +508,7 @@ export default function RacesPage() {
       </div>
 
       <h2>レース一覧</h2>
-      <details className="collapsible-panel" open={hasFilters}>
-        <summary>
-          検索条件
-          {hasFilters && <span className="summary-pill">絞り込み中</span>}
-        </summary>
-        <div className="race-filters">
+      <div className="race-filters">
           <label>
             <span>レース名</span>
             <input
@@ -596,8 +597,7 @@ export default function RacesPage() {
           <button className="secondary" onClick={clearFilters}>
             クリア
           </button>
-        </div>
-      </details>
+      </div>
 
       <table className="table">
         <thead>

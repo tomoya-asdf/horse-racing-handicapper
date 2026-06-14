@@ -68,7 +68,20 @@ export default function HorsePage({ horseId }: { horseId: string }) {
                 <td>{result.finish_position ?? "-"}</td>
                 <td>{result.popularity ? `${result.popularity}人気` : "-"}</td>
                 <td>{result.odds ?? "-"}</td>
-                <td>{result.jockey ?? "-"}</td>
+                <td>
+                  {result.jockey_id ? (
+                    <a
+                      className="link-button"
+                      href={`/jockeys/${encodeURIComponent(result.jockey_id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {result.jockey ?? result.jockey_id}
+                    </a>
+                  ) : (
+                    result.jockey ?? "-"
+                  )}
+                </td>
                 <td>{result.weight ?? "-"}</td>
                 <td>{formatTimeSeconds(result.time_seconds)}</td>
                 <td>{result.last_3f ?? "-"}</td>

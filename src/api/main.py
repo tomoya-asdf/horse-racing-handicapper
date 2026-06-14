@@ -8,6 +8,8 @@
 
 import logging
 import secrets
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -127,6 +129,7 @@ def _job_to_dict(run: JobRun) -> dict:
         "trigger": run.trigger,
         "status": run.status,
         "detail": run.detail,
+        "params": run.params,
         "created_at": _iso(run.created_at),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
@@ -765,6 +768,7 @@ def horse_detail(horse_id: str) -> dict:
                     "popularity": r.popularity,
                     "finish_position": r.finish_position,
                     "jockey": r.jockey,
+                    "jockey_id": r.jockey_id,
                     "weight": r.weight,
                     "distance": r.distance,
                     "track_type": r.track_type,
@@ -1025,6 +1029,51 @@ def trigger_job(job_name: str, body: dict | None = None) -> dict:
         params = _validate_backtest_params(body or {})
     result = jobs.enqueue(job_name, params)
     return {**result, "job_name": job_name, "label": JOB_LABELS[job_name]}
+
+
+@app.get("/api/jobs/{run_id}", dependencies=[Depends(require_admin)])
+def job_detail(run_id: int) -> dict:
+    session = get_session()
+    try:
+        run = session.get(JobRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="job run not found")
+        return _job_to_dict(run)
+    finally:
+        session.close()
+
+
+@app.post("/api/jobs/{run_id}/stop", dependencies=[Depends(require_admin)])
+def stop_job(run_id: int) -> dict:
+    if not jobs.stop_queued(run_id):
+        raise HTTPException(
+            status_code=409,
+            detail="停止できるのは実行待ち(queued)のジョブのみです。実行中ジョブは安全に中断できません。",
+        )
+    return {"stopped": True, "id": run_id}
+
+
+@app.post("/api/system/restart", dependencies=[Depends(require_admin)])
+def restart_system() -> dict:
+    docker = shutil.which("docker")
+    compose_file = Path("/app/docker-compose.yml")
+    if docker is None or not compose_file.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Web UIコンテナからDocker Composeを操作できない構成です。"
+                "ホスト側で `docker compose restart collector predictor webui` を実行してください。"
+            ),
+        )
+    result = subprocess.run(
+        [docker, "compose", "-f", str(compose_file), "restart", "collector", "predictor", "webui"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=(result.stderr or result.stdout or "restart failed")[:1000])
+    return {"restarted": True, "detail": result.stdout}
 
 
 @app.get("/api/settings", dependencies=[Depends(require_admin)])

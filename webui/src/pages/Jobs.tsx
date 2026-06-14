@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { formatDateTime, getJSON, postJSON } from "../api";
 import { ErrorNote, StatusBadge, usePolling } from "../components";
 import type { JobsResponse } from "../types";
@@ -40,6 +40,7 @@ export default function JobsPage() {
   const { data, error } = usePolling<JobsResponse>(() => getJSON("/api/jobs?limit=50"), 5000);
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [openJobId, setOpenJobId] = useState<number | null>(null);
   const [backfillStart, setBackfillStart] = useState(isoDaysAgo(14));
   const [backfillEnd, setBackfillEnd] = useState(isoDaysAgo(1));
   const [backtestStart, setBacktestStart] = useState(isoDaysAgo(365));
@@ -66,9 +67,41 @@ export default function JobsPage() {
     void runJob(name, label, body);
   };
 
+  const stopJob = async (id: number) => {
+    setMessage(null);
+    setActionError(null);
+    try {
+      await postJSON(`/api/jobs/${id}/stop`);
+      setMessage("実行待ちジョブを停止しました。");
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const restartSystem = async () => {
+    setMessage(null);
+    setActionError(null);
+    const ok = window.confirm(
+      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない構成では、手動コマンドが表示されます。"
+    );
+    if (!ok) return;
+    try {
+      await postJSON("/api/system/restart");
+      setMessage("再起動を依頼しました。数十秒後に画面を再読み込みしてください。");
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div>
       <h2>手動実行</h2>
+      <div className="admin-action-bar">
+        <button className="secondary danger-outline" onClick={() => void restartSystem()}>
+          システム全体を再起動
+        </button>
+        <span className="muted">Docker操作権限がない構成では手動コマンドを案内します。</span>
+      </div>
       <p className="muted">
         実行依頼はキューに登録され、collector / predictor サービスが短い間隔で取得して実行します。
       </p>
@@ -165,17 +198,59 @@ export default function JobsPage() {
         </thead>
         <tbody>
           {(data?.jobs ?? []).map((job) => (
-            <tr key={job.id}>
-              <td>{job.label}</td>
-              <td>
-                <StatusBadge status={job.status} />
-              </td>
-              <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
-              <td>{formatDateTime(job.created_at)}</td>
-              <td>{formatDateTime(job.started_at)}</td>
-              <td>{formatDateTime(job.finished_at)}</td>
-              <td className="detail-cell">{job.detail ?? "-"}</td>
-            </tr>
+            <Fragment key={job.id}>
+              <tr
+                className="row-clickable"
+                onClick={() => setOpenJobId((current) => (current === job.id ? null : job.id))}
+              >
+                <td>{job.label}</td>
+                <td>
+                  <StatusBadge status={job.status} />
+                </td>
+                <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
+                <td>{formatDateTime(job.created_at)}</td>
+                <td>{formatDateTime(job.started_at)}</td>
+                <td>{formatDateTime(job.finished_at)}</td>
+                <td className="detail-cell">{job.detail ? job.detail.split("\n")[0] : "-"}</td>
+              </tr>
+              {openJobId === job.id && (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="job-detail-panel">
+                      <div className="job-detail-actions">
+                        <strong>実行状況ログ</strong>
+                        {job.status === "queued" && (
+                          <button
+                            className="secondary danger-outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void stopJob(job.id);
+                            }}
+                          >
+                            停止
+                          </button>
+                        )}
+                      </div>
+                      <div className="job-detail-grid">
+                        <span>ID</span>
+                        <span>{job.id}</span>
+                        <span>状態</span>
+                        <span>{job.status}</span>
+                        <span>パラメータ</span>
+                        <span className="detail-cell">{job.params ?? "-"}</span>
+                        <span>ログ</span>
+                        <span className="detail-cell">
+                          {job.detail ??
+                            (job.status === "running"
+                              ? "実行中です。完了後に結果ログが反映されます。"
+                              : "-")}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

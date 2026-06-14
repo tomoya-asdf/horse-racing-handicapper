@@ -28,6 +28,7 @@ export interface JobRun {
   trigger: string;
   status: "queued" | "running" | "success" | "failed";
   detail: string | null;
+  params: string | null;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -272,6 +273,7 @@ export interface HorseResult {
   popularity: number | null;
   finish_position: number | null;
   jockey: string | null;
+  jockey_id: string | null;
   weight: number | null;
   distance: number | null;
   track_type: string | null;

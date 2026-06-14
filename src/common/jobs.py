@@ -123,6 +123,22 @@ def enqueue(job_name: str, params: dict | None = None) -> dict:
         session.close()
 
 
+def stop_queued(run_id: int) -> bool:
+    """queuedの手動ジョブを停止する。実行中ジョブは安全に中断できないため対象外。"""
+    session = get_session()
+    try:
+        run = session.get(JobRun, run_id)
+        if run is None or run.status != JobStatus.QUEUED.value:
+            return False
+        run.status = JobStatus.FAILED.value
+        run.detail = "管理者により実行前に停止されました"
+        run.finished_at = now_jst()
+        session.commit()
+        return True
+    finally:
+        session.close()
+
+
 def run_scheduled(job_name: str, func: Handler) -> None:
     """スケジュール実行のエントリポイント。履歴を記録しつつジョブを実行する。"""
     run_id = _create_running(job_name, JobTrigger.SCHEDULED.value)
