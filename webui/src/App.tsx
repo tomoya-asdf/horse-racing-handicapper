@@ -126,7 +126,7 @@ export default function App() {
     <div className="app">
       {!detailPageOpen && <header className="header">
         <h1>
-          競馬予測AI <span className="header-sub">管理コンソール</span>
+          🏇競馬予測AI <span className="header-sub">管理コンソール</span>
         </h1>
         <div className="header-nav">
           <nav className="tabs">

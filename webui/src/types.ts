@@ -36,6 +36,7 @@ export interface JobRun {
 
 export interface JobsResponse {
   jobs: JobRun[];
+  latest_jobs: JobRun[];
   scheduled_jobs: ScheduledJobSetting[];
 }
 

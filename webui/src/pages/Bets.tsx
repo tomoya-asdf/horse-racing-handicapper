@@ -127,9 +127,9 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
           )}
 
           {data.cumulative.length > 1 && (
-            <details className="collapsible-panel">
-              <summary>累積 投資額 / 回収額</summary>
-              <div className="chart-card chart-card-embedded">
+            <>
+              <h2>累積 投資額 / 回収額</h2>
+              <div className="chart-card">
                 <ResponsiveContainer width="100%" height={260}>
                   <LineChart data={data.cumulative}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#2a3441" />
@@ -163,7 +163,7 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            </details>
+            </>
           )}
 
           <h2>履歴一覧</h2>

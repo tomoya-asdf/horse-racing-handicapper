@@ -1,5 +1,5 @@
 import { getJSON, formatDateTime, formatYen } from "../api";
-import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
+import { ErrorNote, ModeBadge, usePolling } from "../components";
 import type { AuthStatus, BetStats, Overview } from "../types";
 
 function RecoveryCard({ mode, stats }: { mode: string; stats: BetStats }) {
@@ -192,40 +192,6 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
         </div>
       </section>
 
-      <details className="collapsible-panel">
-        <summary>ジョブの最終実行</summary>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>ジョブ</th>
-              <th>状態</th>
-              <th>実行種別</th>
-              <th>開始</th>
-              <th>結果</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.latest_jobs.length === 0 && (
-              <tr>
-                <td colSpan={5} className="muted">
-                  まだ実行履歴がありません
-                </td>
-              </tr>
-            )}
-            {data.latest_jobs.map((job) => (
-              <tr key={job.id}>
-                <td>{job.label}</td>
-                <td>
-                  <StatusBadge status={job.status} />
-                </td>
-                <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
-                <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
-                <td className="detail-cell">{job.detail ?? "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
     </div>
   );
 }

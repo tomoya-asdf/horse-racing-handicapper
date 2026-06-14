@@ -284,6 +284,14 @@ def _upsert_jockey_results(session, jockey_id: str, name: str | None, results: l
     if jockey is None:
         jockey = Jockey(jockey_id=jockey_id)
         session.add(jockey)
+    if not name:
+        entry = (
+            session.query(Entry)
+            .filter(Entry.jockey_id == jockey_id, Entry.jockey.isnot(None), Entry.jockey != "")
+            .order_by(Entry.id.desc())
+            .first()
+        )
+        name = entry.jockey if entry else None
     if name:
         jockey.name = name
     jockey.results_fetched_at = now_jst()
@@ -303,6 +311,14 @@ def _upsert_trainer_results(session, trainer_id: str, name: str | None, results:
     if trainer is None:
         trainer = Trainer(trainer_id=trainer_id)
         session.add(trainer)
+    if not name:
+        entry = (
+            session.query(Entry)
+            .filter(Entry.trainer_id == trainer_id, Entry.trainer.isnot(None), Entry.trainer != "")
+            .order_by(Entry.id.desc())
+            .first()
+        )
+        name = entry.trainer if entry else None
     if name:
         trainer.name = name
     trainer.results_fetched_at = now_jst()
@@ -314,7 +330,12 @@ def _jockey_ids_to_fetch(session, limit: int) -> list[str]:
         session.query(Entry.jockey_id)
         .outerjoin(Jockey, Jockey.jockey_id == Entry.jockey_id)
         .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
-        .filter((Jockey.jockey_id.is_(None)) | (Jockey.results_fetched_at < stale_before))
+        .filter(
+            (Jockey.jockey_id.is_(None))
+            | (Jockey.results_fetched_at < stale_before)
+            | (Jockey.name.is_(None))
+            | (Jockey.name == "")
+        )
         .distinct()
         .limit(limit)
         .all()
@@ -328,7 +349,12 @@ def _trainer_ids_to_fetch(session, limit: int) -> list[str]:
         session.query(Entry.trainer_id)
         .outerjoin(Trainer, Trainer.trainer_id == Entry.trainer_id)
         .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
-        .filter((Trainer.trainer_id.is_(None)) | (Trainer.results_fetched_at < stale_before))
+        .filter(
+            (Trainer.trainer_id.is_(None))
+            | (Trainer.results_fetched_at < stale_before)
+            | (Trainer.name.is_(None))
+            | (Trainer.name == "")
+        )
         .distinct()
         .limit(limit)
         .all()

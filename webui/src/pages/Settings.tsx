@@ -138,7 +138,7 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <h2>賭け設定 / 再起動不要</h2>
+      <h2>賭け設定</h2>
       <ErrorNote message={error} />
       {message && <div className="info-note">{message}</div>}
 

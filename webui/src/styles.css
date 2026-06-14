@@ -117,12 +117,12 @@ body {
 }
 
 .content {
-  padding-top: 24px;
+  padding-top: 8px;
 }
 
 h2 {
   font-size: 16px;
-  margin: 28px 0 12px;
+  margin: 12px 0 12px;
 }
 
 .overview-section {
@@ -132,7 +132,7 @@ h2 {
 .overview-section > h2 {
   border-bottom: 1px solid var(--border);
   color: var(--text);
-  margin: 20px 0 12px;
+  margin: 12px 0 12px;
   padding-bottom: 6px;
 }
 
@@ -407,6 +407,31 @@ h2 {
 
 .job-detail-grid > span:nth-child(odd) {
   color: var(--text-muted);
+}
+
+.latest-jobs-table {
+  margin-bottom: 18px;
+}
+
+.danger-zone {
+  align-items: center;
+  background: rgba(248, 81, 73, 0.06);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 10px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding: 16px;
+}
+
+.danger-zone h2 {
+  color: var(--red);
+  margin: 0 0 4px;
+}
+
+.danger-zone p {
+  margin: 0;
 }
 
 /* バッジ */
@@ -1172,4 +1197,159 @@ button.secondary:hover {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  body {
+    font-size: 13px;
+  }
+
+  .app {
+    padding: 0 12px 40px;
+  }
+
+  .header {
+    align-items: stretch;
+    padding-top: 12px;
+  }
+
+  .header h1 {
+    font-size: 17px;
+    line-height: 1.35;
+  }
+
+  .header-sub {
+    display: block;
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  .header-nav,
+  .tabs,
+  .auth-actions {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .tabs {
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    padding: 9px 12px;
+  }
+
+  .auth-button {
+    margin: 0 0 8px;
+    width: 100%;
+  }
+
+  .content {
+    padding-top: 4px;
+  }
+
+  h2 {
+    font-size: 15px;
+    margin: 14px 0 8px;
+  }
+
+  .card-grid,
+  .job-buttons {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .card,
+  .chart-card,
+  .backfill-form,
+  .race-filters {
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .metric {
+    font-size: 22px;
+  }
+
+  .page-header,
+  .pagination-bar,
+  .mode-switch,
+  .schedule-actions,
+  .admin-action-bar,
+  .danger-zone {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mode-switch button,
+  .pagination-actions,
+  .pagination-actions button,
+  .danger-zone button {
+    width: 100%;
+  }
+
+  .pagination-actions {
+    justify-content: space-between;
+  }
+
+  .backfill-form,
+  .race-filters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .backfill-form label,
+  .backfill-form button,
+  .race-filters label,
+  .race-filters button {
+    width: 100%;
+  }
+
+  .backfill-form input,
+  .race-filters input,
+  .race-filters select,
+  .schedule-number-input {
+    min-height: 40px;
+    width: 100%;
+  }
+
+  .table {
+    display: block;
+    font-size: 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px 9px;
+  }
+
+  .detail-cell {
+    max-width: 280px;
+    white-space: normal;
+  }
+
+  .job-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .job-detail-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .horse-detail-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .chart-card {
+    overflow-x: auto;
+  }
 }

@@ -96,12 +96,6 @@ export default function JobsPage() {
   return (
     <div>
       <h2>手動実行</h2>
-      <div className="admin-action-bar">
-        <button className="secondary danger-outline" onClick={() => void restartSystem()}>
-          システム全体を再起動
-        </button>
-        <span className="muted">Docker操作権限がない構成では手動コマンドを案内します。</span>
-      </div>
       <p className="muted">
         実行依頼はキューに登録され、collector / predictor サービスが短い間隔で取得して実行します。
       </p>
@@ -182,6 +176,39 @@ export default function JobsPage() {
       {message && <div className="info-note">{message}</div>}
       <ErrorNote message={actionError} />
 
+      <h2>ジョブの最終実行</h2>
+      <table className="table latest-jobs-table">
+        <thead>
+          <tr>
+            <th>ジョブ</th>
+            <th>状態</th>
+            <th>実行種別</th>
+            <th>開始</th>
+            <th>結果</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(data?.latest_jobs ?? []).length === 0 && (
+            <tr>
+              <td colSpan={5} className="muted">
+                まだ実行履歴がありません
+              </td>
+            </tr>
+          )}
+          {(data?.latest_jobs ?? []).map((job) => (
+            <tr key={job.id}>
+              <td>{job.label}</td>
+              <td>
+                <StatusBadge status={job.status} />
+              </td>
+              <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
+              <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
+              <td className="detail-cell">{job.detail ?? "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
       <h2>実行履歴</h2>
       <ErrorNote message={error} />
       <table className="table">
@@ -254,6 +281,18 @@ export default function JobsPage() {
           ))}
         </tbody>
       </table>
+
+      <section className="danger-zone">
+        <div>
+          <h2>管理操作</h2>
+          <p className="muted">
+            システム全体の再起動は通常のジョブ実行と別操作です。必要な時だけ実行してください。
+          </p>
+        </div>
+        <button className="secondary danger-outline" onClick={() => void restartSystem()}>
+          システム全体を再起動
+        </button>
+      </section>
     </div>
   );
 }

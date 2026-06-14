@@ -904,14 +904,22 @@ def fetch_horse_results(horse_id: str) -> dict:
     return {"horse_id": horse_id, "name": name, "results": results}
 
 
+def _clean_profile_name(text: str) -> str | None:
+    name = re.split(r"\s|　|\(|（", text.strip(), maxsplit=1)[0].strip()
+    return name or None
+
+
 def _parse_profile_name(soup: BeautifulSoup) -> str | None:
-    h1 = soup.find("h1")
-    if h1 is not None:
-        name = h1.get_text(" ", strip=True)
-        return name or None
+    for selector in (".db_head_name h1", ".db_head_name", ".Name h1", ".Name", "h1"):
+        for element in soup.select(selector):
+            name = _clean_profile_name(element.get_text(" ", strip=True))
+            if name:
+                return name
     title = soup.find("title")
     if title is not None:
-        return title.get_text(" ", strip=True).split("|")[0].strip() or None
+        text = title.get_text(" ", strip=True).split("|")[0].strip()
+        text = re.split(r"の騎手成績|の調教師成績|｜|\|", text, maxsplit=1)[0]
+        return _clean_profile_name(text)
     return None
 
 

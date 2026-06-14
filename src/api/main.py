@@ -804,6 +804,14 @@ def jockey_detail(jockey_id: str) -> dict:
             results_fetched_at = None
         else:
             name = jockey.name if jockey else None
+            if not name and results:
+                entry = (
+                    session.query(Entry)
+                    .filter(Entry.jockey_id == jockey_id, Entry.jockey.isnot(None))
+                    .order_by(Entry.id.desc())
+                    .first()
+                )
+                name = entry.jockey if entry else None
             results_fetched_at = _iso(jockey.results_fetched_at) if jockey else None
 
         return {
@@ -857,6 +865,14 @@ def trainer_detail(trainer_id: str) -> dict:
             results_fetched_at = None
         else:
             name = trainer.name if trainer else None
+            if not name and results:
+                entry = (
+                    session.query(Entry)
+                    .filter(Entry.trainer_id == trainer_id, Entry.trainer.isnot(None))
+                    .order_by(Entry.id.desc())
+                    .first()
+                )
+                name = entry.trainer if entry else None
             results_fetched_at = _iso(trainer.results_fetched_at) if trainer else None
 
         return {
@@ -966,7 +982,21 @@ def list_jobs(limit: int = 50) -> dict:
             .limit(min(limit, 200))
             .all()
         )
-        return {"jobs": [_job_to_dict(run) for run in runs], "scheduled_jobs": scheduled_jobs_view()}
+        latest_jobs = []
+        for job_name in jobs.ALL_JOBS:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.job_name == job_name)
+                .order_by(JobRun.created_at.desc().nullslast(), JobRun.id.desc())
+                .first()
+            )
+            if run:
+                latest_jobs.append(_job_to_dict(run))
+        return {
+            "jobs": [_job_to_dict(run) for run in runs],
+            "latest_jobs": latest_jobs,
+            "scheduled_jobs": scheduled_jobs_view(),
+        }
     finally:
         session.close()
 
