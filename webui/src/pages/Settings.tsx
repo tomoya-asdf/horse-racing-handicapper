@@ -297,8 +297,8 @@ export default function SettingsPage() {
       </div>
 
       {view && (
-        <>
-          <h2>環境設定(.env / 変更にはコンテナの再作成が必要)</h2>
+        <details className="collapsible-panel">
+          <summary>環境設定(.env / 変更にはコンテナの再作成が必要)</summary>
           <table className="table settings-env-table">
             <thead>
               <tr>
@@ -324,7 +324,7 @@ export default function SettingsPage() {
               ))}
             </tbody>
           </table>
-        </>
+        </details>
       )}
     </div>
   );

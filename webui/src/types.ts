@@ -7,6 +7,18 @@ export interface BetStats {
   pending_count: number;
   dry_run_count: number;
   failed_count: number;
+  by_type: Record<string, BetTypeStats>;
+}
+
+export interface BetTypeStats {
+  invested: number;
+  payout: number;
+  recovery_rate: number | null;
+  settled_count: number;
+  unsettled_count: number;
+  pending_count: number;
+  dry_run_count: number;
+  failed_count: number;
 }
 
 export interface JobRun {
@@ -101,9 +113,16 @@ export interface Overview {
     race_count: number;
     finished_race_count: number;
     horse_result_horse_count: number;
+    horse_target_count: number;
+    horse_uncollected_count: number;
     jockey_result_jockey_count: number;
+    jockey_target_count: number;
+    jockey_uncollected_count: number;
     trainer_result_trainer_count: number;
+    trainer_target_count: number;
+    trainer_uncollected_count: number;
     upcoming_race_count: number;
+    predicted_upcoming_race_count: number;
     last_collected_at: string | null;
   };
   modes: Partial<Record<"sim" | "prod", BetStats>>;
@@ -160,6 +179,8 @@ export interface RaceEntry {
   horse_weight: number | null;
   horse_weight_diff: number | null;
   odds: number | null;
+  pre_race_odds: number | null;
+  final_odds: number | null;
   popularity: number | null;
   finish_position: number | null;
   score: number | null;
@@ -202,9 +223,28 @@ export interface RaceDetail {
     top_ai: RaceAiPick[];
     score_gap: number | null;
     race_shape: string | null;
+    odds_status: RaceOddsStatus[];
   };
   entries: RaceEntry[];
+  bet_candidates: RaceBetCandidate[];
   bets: RaceBet[];
+}
+
+export interface RaceBetCandidate {
+  bet_type: string;
+  entry_id: number;
+  horse_number: number | null;
+  horse_name: string | null;
+  combination: string;
+  probability: number;
+  odds: number;
+  expected_value: number;
+}
+
+export interface RaceOddsStatus {
+  bet_type: string;
+  available: number;
+  total: number;
 }
 
 export interface RaceBet {

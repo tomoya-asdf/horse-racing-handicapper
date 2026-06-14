@@ -92,44 +92,81 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
             </div>
           </div>
 
-          {data.cumulative.length > 1 && (
-            <div className="chart-card">
-              <div className="card-title">累積 投資額 / 回収額(決済済み)</div>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={data.cumulative}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a3441" />
-                  <XAxis
-                    dataKey="placed_at"
-                    tickFormatter={(v: string) => formatDateTime(v)}
-                    stroke="#8b98a9"
-                    fontSize={12}
-                  />
-                  <YAxis stroke="#8b98a9" fontSize={12} />
-                  <Tooltip
-                    labelFormatter={(v) => formatDateTime(String(v))}
-                    formatter={(value: number, name: string) => [formatYen(value), name]}
-                    contentStyle={{ background: "#1a212b", border: "1px solid #2a3441" }}
-                  />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="invested"
-                    name="投資額"
-                    stroke="#8b98a9"
-                    dot={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="payout"
-                    name="回収額"
-                    stroke="#4f9cf9"
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+          {Object.keys(data.stats.by_type).length > 0 && (
+            <>
+              <h2>券種別回収率</h2>
+              <table className="table compact-stats-table">
+                <thead>
+                  <tr>
+                    <th>券種</th>
+                    <th>投資額</th>
+                    <th>回収額</th>
+                    <th>回収率</th>
+                    <th>決済済み</th>
+                    <th>未決済</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(data.stats.by_type).map(([betType, stats]) => (
+                    <tr key={betType}>
+                      <td>{betType}</td>
+                      <td>{formatYen(stats.invested)}</td>
+                      <td>{formatYen(stats.payout)}</td>
+                      <td>
+                        {stats.recovery_rate === null
+                          ? "-"
+                          : `${stats.recovery_rate.toFixed(1)} %`}
+                      </td>
+                      <td>{stats.settled_count} 件</td>
+                      <td>{stats.unsettled_count} 件</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
 
+          {data.cumulative.length > 1 && (
+            <details className="collapsible-panel">
+              <summary>累積 投資額 / 回収額</summary>
+              <div className="chart-card chart-card-embedded">
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={data.cumulative}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a3441" />
+                    <XAxis
+                      dataKey="placed_at"
+                      tickFormatter={(v: string) => formatDateTime(v)}
+                      stroke="#8b98a9"
+                      fontSize={12}
+                    />
+                    <YAxis stroke="#8b98a9" fontSize={12} />
+                    <Tooltip
+                      labelFormatter={(v) => formatDateTime(String(v))}
+                      formatter={(value: number, name: string) => [formatYen(value), name]}
+                      contentStyle={{ background: "#1a212b", border: "1px solid #2a3441" }}
+                    />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="invested"
+                      name="投資額"
+                      stroke="#8b98a9"
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="payout"
+                      name="回収額"
+                      stroke="#4f9cf9"
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </details>
+          )}
+
+          <h2>履歴一覧</h2>
           <table className="table">
             <thead>
               <tr>

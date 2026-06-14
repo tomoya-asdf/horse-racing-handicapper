@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { getJSON, formatDate, formatFullDateTime } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
-import type { RaceDetail, RaceEntry, RaceSummary, RacesResponse } from "../types";
+import type { RaceBetCandidate, RaceDetail, RaceEntry, RaceSummary, RacesResponse } from "../types";
 
 const PAGE_SIZE = 50;
 
@@ -14,7 +14,8 @@ type SortKey =
   | "trainer"
   | "weight"
   | "horse_weight"
-  | "odds"
+  | "pre_race_odds"
+  | "final_odds"
   | "popularity"
   | "score"
   | "expected_value"
@@ -143,6 +144,21 @@ function ValueBadge({ label }: { label: string | null }) {
   return <span className={className}>{label}</span>;
 }
 
+function candidateLabel(candidate: RaceBetCandidate): string {
+  if (candidate.bet_type === "単勝" || candidate.bet_type === "複勝") {
+    return `${candidate.horse_number ?? "-"}番 ${candidate.horse_name ?? ""}`;
+  }
+  return candidate.combination;
+}
+
+function probabilityLabel(betType: string): string {
+  if (betType === "単勝") return "1着";
+  if (betType === "複勝") return "3着内";
+  if (betType === "馬連") return "1-2着";
+  if (betType === "ワイド") return "双方3着内";
+  return "的中";
+}
+
 function RaceDetailView({ raceId }: { raceId: number }) {
   const { data, error } = usePolling<RaceDetail>(
     () => getJSON(`/api/races/${raceId}`),
@@ -187,92 +203,153 @@ function RaceDetailView({ raceId }: { raceId: number }) {
           </div>
         </div>
       )}
-      <table className="table">
-        <thead>
-          <tr>
-            <SortHeader label="AI順位" sortKey="ai_rank" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="馬番" sortKey="horse_number" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="馬名" sortKey="horse_name" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="性齢" sortKey="sex_age" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="騎手" sortKey="jockey" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="厩舎" sortKey="trainer" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="斤量" sortKey="weight" defaultDir="desc" sort={sort} onSort={handleSort} />
-            <SortHeader label="馬体重" sortKey="horse_weight" defaultDir="desc" sort={sort} onSort={handleSort} />
-            <SortHeader label="オッズ" sortKey="odds" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="人気" sortKey="popularity" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <SortHeader label="AI勝率" sortKey="score" defaultDir="desc" sort={sort} onSort={handleSort} />
-            <SortHeader label="期待値" sortKey="expected_value" defaultDir="desc" sort={sort} onSort={handleSort} />
-            <th>判定</th>
-            <th>評価</th>
-            <SortHeader label="着順" sortKey="finish_position" defaultDir="asc" sort={sort} onSort={handleSort} />
-            <th>買い</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedEntries.map((e) => (
-            <tr key={e.id} className={e.has_bet ? "row-bet" : ""}>
-              <td>{formatRank(e.ai_rank)}</td>
-              <td>{e.horse_number}</td>
-              <td>
-                {e.horse_id ? (
-                  <a
-                    className="link-button"
-                    href={`/horses/${encodeURIComponent(e.horse_id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {e.horse_name}
-                  </a>
-                ) : (
-                  e.horse_name
-                )}
-              </td>
-              <td>{formatSexAge(e.sex, e.age)}</td>
-              <td>
-                {e.jockey_id ? (
-                  <a
-                    className="link-button"
-                    href={`/jockeys/${encodeURIComponent(e.jockey_id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {e.jockey || e.jockey_id}
-                  </a>
-                ) : (
-                  e.jockey || "-"
-                )}
-              </td>
-              <td>
-                {e.trainer_id ? (
-                  <a
-                    className="link-button"
-                    href={`/trainers/${encodeURIComponent(e.trainer_id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {e.trainer || e.trainer_id}
-                  </a>
-                ) : (
-                  e.trainer || "-"
-                )}
-              </td>
-              <td>{e.weight ?? "-"}</td>
-              <td>{formatHorseWeight(e.horse_weight, e.horse_weight_diff)}</td>
-              <td>{e.odds ?? "-"}</td>
-              <td>{formatPopularity(e.popularity)}</td>
-              <td>
-                <ScoreBar score={e.score} />
-              </td>
-              <td>{formatExpectedValue(e.expected_value)}</td>
-              <td>
-                <ValueBadge label={e.value_label} />
-              </td>
-              <td>{e.ai_vs_odds ?? "-"}</td>
-              <td>{e.finish_position ?? "-"}</td>
-              <td>{e.has_bet ? "有" : ""}</td>
-            </tr>
+      <details className="collapsible-panel bet-candidates">
+        <summary>買い目候補</summary>
+        <div className="bet-candidates-header">
+          <div>
+            <h4>買い目候補</h4>
+            <p className="muted">単勝・複勝・馬連・ワイドを期待値順に比較</p>
+          </div>
+        </div>
+        <div className="odds-status-row">
+          {data.analysis.odds_status.map((item) => (
+            <span key={item.bet_type} className="odds-status-pill">
+              {item.bet_type}: {item.available}/{item.total}
+            </span>
           ))}
-        </tbody>
+        </div>
+        {data.bet_candidates.length === 0 ? (
+          <p className="muted">候補なし</p>
+        ) : (
+          <>
+            <table className="table compact-table">
+              <thead>
+                <tr>
+                  <th>券種</th>
+                  <th>買い目</th>
+                  <th>確率</th>
+                  <th>オッズ</th>
+                  <th>期待値</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.bet_candidates.slice(0, 8).map((candidate) => (
+                  <tr key={`${candidate.bet_type}-${candidate.combination}`}>
+                    <td>{candidate.bet_type}</td>
+                    <td>{candidateLabel(candidate)}</td>
+                    <td>
+                      {formatPercent(candidate.probability)}
+                      <span className="probability-kind"> {probabilityLabel(candidate.bet_type)}</span>
+                    </td>
+                    <td>{candidate.odds.toFixed(1)}</td>
+                    <td>{formatExpectedValue(candidate.expected_value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </details>
+      <table className="table">
+          <thead>
+            <tr>
+              <SortHeader label="AI順位" sortKey="ai_rank" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="馬番" sortKey="horse_number" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="馬名" sortKey="horse_name" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="性齢" sortKey="sex_age" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="騎手" sortKey="jockey" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="厩舎" sortKey="trainer" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="斤量" sortKey="weight" defaultDir="desc" sort={sort} onSort={handleSort} />
+              <SortHeader label="馬体重" sortKey="horse_weight" defaultDir="desc" sort={sort} onSort={handleSort} />
+              <SortHeader
+                label="事前オッズ"
+                sortKey="pre_race_odds"
+                defaultDir="asc"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortHeader
+                label="確定オッズ"
+                sortKey="final_odds"
+                defaultDir="asc"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortHeader label="人気" sortKey="popularity" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <SortHeader label="AI勝率" sortKey="score" defaultDir="desc" sort={sort} onSort={handleSort} />
+              <SortHeader label="期待値" sortKey="expected_value" defaultDir="desc" sort={sort} onSort={handleSort} />
+              <th>判定</th>
+              <th>評価</th>
+              <SortHeader label="着順" sortKey="finish_position" defaultDir="asc" sort={sort} onSort={handleSort} />
+              <th>買い</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedEntries.map((e) => (
+              <tr key={e.id} className={e.has_bet ? "row-bet" : ""}>
+                <td>{formatRank(e.ai_rank)}</td>
+                <td>{e.horse_number}</td>
+                <td>
+                  {e.horse_id ? (
+                    <a
+                      className="link-button"
+                      href={`/horses/${encodeURIComponent(e.horse_id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {e.horse_name}
+                    </a>
+                  ) : (
+                    e.horse_name
+                  )}
+                </td>
+                <td>{formatSexAge(e.sex, e.age)}</td>
+                <td>
+                  {e.jockey_id ? (
+                    <a
+                      className="link-button"
+                      href={`/jockeys/${encodeURIComponent(e.jockey_id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {e.jockey || e.jockey_id}
+                    </a>
+                  ) : (
+                    e.jockey || "-"
+                  )}
+                </td>
+                <td>
+                  {e.trainer_id ? (
+                    <a
+                      className="link-button"
+                      href={`/trainers/${encodeURIComponent(e.trainer_id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {e.trainer || e.trainer_id}
+                    </a>
+                  ) : (
+                    e.trainer || "-"
+                  )}
+                </td>
+                <td>{e.weight ?? "-"}</td>
+                <td>{formatHorseWeight(e.horse_weight, e.horse_weight_diff)}</td>
+                <td>{e.pre_race_odds ?? "-"}</td>
+                <td>{e.final_odds ?? "-"}</td>
+                <td>{formatPopularity(e.popularity)}</td>
+                <td>
+                  <ScoreBar score={e.score} />
+                </td>
+                <td>{formatExpectedValue(e.expected_value)}</td>
+                <td>
+                  <ValueBadge label={e.value_label} />
+                </td>
+                <td>{e.ai_vs_odds ?? "-"}</td>
+                <td>{e.finish_position ?? "-"}</td>
+                <td>{e.has_bet ? "有" : ""}</td>
+              </tr>
+            ))}
+          </tbody>
       </table>
       {data.bets.length > 0 && (
         <div className="race-bets">
@@ -369,6 +446,7 @@ export default function RacesPage() {
   const canGoPrev = page > 0;
   const canGoNext = data ? data.offset + rowCount < total : false;
   const lastPage = total > 0 ? Math.floor((total - 1) / PAGE_SIZE) : 0;
+  const hasFilters = Object.values(filters).some(Boolean);
 
   const changePage = (nextPage: number) => {
     setOpenId(null);
@@ -423,97 +501,103 @@ export default function RacesPage() {
         </div>
       </div>
 
-      <h2>レース一覧(50件ずつ表示)</h2>
-      <div className="race-filters">
-        <label>
-          <span>レース名</span>
-          <input
-            value={filters.race_name}
-            onChange={(e) => updateFilter("race_name", e.target.value)}
-            placeholder="レース名で検索"
-          />
-        </label>
-        <label>
-          <span>日付</span>
-          <input
-            type="date"
-            value={filters.race_date}
-            onChange={(e) => updateFilter("race_date", e.target.value)}
-          />
-        </label>
-        <label>
-          <span>R</span>
-          <select
-            value={filters.race_number}
-            onChange={(e) => updateFilter("race_number", e.target.value)}
-          >
-            <option value="">すべて</option>
-            {Array.from({ length: 12 }, (_, index) => index + 1).map((raceNumber) => (
-              <option key={raceNumber} value={raceNumber}>
-                {raceNumber}R
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>競馬場</span>
-          <select value={filters.venue} onChange={(e) => updateFilter("venue", e.target.value)}>
-            <option value="">すべて</option>
-            {(data?.venues ?? []).map((venue) => (
-              <option key={venue} value={venue}>
-                {venue}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>状態</span>
-          <select value={filters.status} onChange={(e) => updateFilter("status", e.target.value)}>
-            <option value="">すべて</option>
-            <option value="upcoming">発走前</option>
-            <option value="finished">確定</option>
-            <option value="unfinished">未確定</option>
-          </select>
-        </label>
-        <label>
-          <span>馬名</span>
-          <input
-            value={filters.horse_name}
-            onChange={(e) => updateFilter("horse_name", e.target.value)}
-            placeholder="馬名で絞り込み"
-          />
-        </label>
-        <label>
-          <span>騎手</span>
-          <input
-            value={filters.jockey}
-            onChange={(e) => updateFilter("jockey", e.target.value)}
-            placeholder="騎手名で絞り込み"
-          />
-        </label>
-        <label>
-          <span>予測</span>
-          <select
-            value={filters.prediction}
-            onChange={(e) => updateFilter("prediction", e.target.value)}
-          >
-            <option value="">すべて</option>
-            <option value="yes">予測あり</option>
-            <option value="no">予測なし</option>
-          </select>
-        </label>
-        <label>
-          <span>買い</span>
-          <select value={filters.bet} onChange={(e) => updateFilter("bet", e.target.value)}>
-            <option value="">すべて</option>
-            <option value="yes">買いあり</option>
-            <option value="no">買いなし</option>
-          </select>
-        </label>
-        <button className="secondary" onClick={clearFilters}>
-          クリア
-        </button>
-      </div>
+      <h2>レース一覧</h2>
+      <details className="collapsible-panel" open={hasFilters}>
+        <summary>
+          検索条件
+          {hasFilters && <span className="summary-pill">絞り込み中</span>}
+        </summary>
+        <div className="race-filters">
+          <label>
+            <span>レース名</span>
+            <input
+              value={filters.race_name}
+              onChange={(e) => updateFilter("race_name", e.target.value)}
+              placeholder="レース名で検索"
+            />
+          </label>
+          <label>
+            <span>日付</span>
+            <input
+              type="date"
+              value={filters.race_date}
+              onChange={(e) => updateFilter("race_date", e.target.value)}
+            />
+          </label>
+          <label>
+            <span>R</span>
+            <select
+              value={filters.race_number}
+              onChange={(e) => updateFilter("race_number", e.target.value)}
+            >
+              <option value="">すべて</option>
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((raceNumber) => (
+                <option key={raceNumber} value={raceNumber}>
+                  {raceNumber}R
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>競馬場</span>
+            <select value={filters.venue} onChange={(e) => updateFilter("venue", e.target.value)}>
+              <option value="">すべて</option>
+              {(data?.venues ?? []).map((venue) => (
+                <option key={venue} value={venue}>
+                  {venue}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>状態</span>
+            <select value={filters.status} onChange={(e) => updateFilter("status", e.target.value)}>
+              <option value="">すべて</option>
+              <option value="upcoming">発走前</option>
+              <option value="finished">確定</option>
+              <option value="unfinished">未確定</option>
+            </select>
+          </label>
+          <label>
+            <span>馬名</span>
+            <input
+              value={filters.horse_name}
+              onChange={(e) => updateFilter("horse_name", e.target.value)}
+              placeholder="馬名で絞り込み"
+            />
+          </label>
+          <label>
+            <span>騎手</span>
+            <input
+              value={filters.jockey}
+              onChange={(e) => updateFilter("jockey", e.target.value)}
+              placeholder="騎手名で絞り込み"
+            />
+          </label>
+          <label>
+            <span>予測</span>
+            <select
+              value={filters.prediction}
+              onChange={(e) => updateFilter("prediction", e.target.value)}
+            >
+              <option value="">すべて</option>
+              <option value="yes">予測あり</option>
+              <option value="no">予測なし</option>
+            </select>
+          </label>
+          <label>
+            <span>買い</span>
+            <select value={filters.bet} onChange={(e) => updateFilter("bet", e.target.value)}>
+              <option value="">すべて</option>
+              <option value="yes">買いあり</option>
+              <option value="no">買いなし</option>
+            </select>
+          </label>
+          <button className="secondary" onClick={clearFilters}>
+            クリア
+          </button>
+        </div>
+      </details>
 
       <table className="table">
         <thead>

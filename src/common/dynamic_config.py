@@ -51,15 +51,6 @@ SCHEDULED_JOB_DEFS = (
         "default_interval": settings.COLLECT_INTERVAL_MINUTES,
     },
     {
-        "job_name": "predict",
-        "enabled_key": "schedule_predict_enabled",
-        "interval_key": "schedule_predict_interval_minutes",
-        "days_key": "schedule_predict_days",
-        "label": "AI予想",
-        "description": "未確定レースに予測スコアを保存します。",
-        "default_interval": settings.PREDICT_INTERVAL_MINUTES,
-    },
-    {
         "job_name": "collect_horses",
         "enabled_key": "schedule_collect_horses_enabled",
         "interval_key": "schedule_collect_horses_interval_minutes",
@@ -85,6 +76,15 @@ SCHEDULED_JOB_DEFS = (
         "label": "調教師過去戦績収集",
         "description": "出走馬の調教師の過去戦績をまとめて補完します。",
         "default_interval": settings.COLLECT_TRAINERS_INTERVAL_MINUTES,
+    },
+    {
+        "job_name": "predict",
+        "enabled_key": "schedule_predict_enabled",
+        "interval_key": "schedule_predict_interval_minutes",
+        "days_key": "schedule_predict_days",
+        "label": "AI予想",
+        "description": "未確定レースに予測スコアを保存します。",
+        "default_interval": settings.PREDICT_INTERVAL_MINUTES,
     },
     {
         "job_name": "bet_decide",

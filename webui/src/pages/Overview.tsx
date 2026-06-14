@@ -40,6 +40,44 @@ function RecoveryCard({ mode, stats }: { mode: string; stats: BetStats }) {
       {stats.failed_count > 0 && (
         <div className="warn-note">購入に失敗した賭けが {stats.failed_count} 件あります。</div>
       )}
+      {Object.keys(stats.by_type).length > 0 && (
+        <div className="mini-stat-table">
+          {Object.entries(stats.by_type).map(([betType, item]) => (
+            <div key={betType}>
+              <span>{betType}</span>
+              <span>
+                {item.recovery_rate === null ? "-" : `${item.recovery_rate.toFixed(1)}%`}
+                <small> {item.settled_count}件</small>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DataCard({
+  title,
+  metric,
+  rows,
+}: {
+  title: string;
+  metric: string;
+  rows: { label: string; value: string }[];
+}) {
+  return (
+    <div className="card data-summary-card">
+      <div className="card-title">{title}</div>
+      <div className="metric">{metric}</div>
+      <div className="card-rows">
+        {rows.map((row) => (
+          <div key={row.label}>
+            <span>{row.label}</span>
+            <span>{row.value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -73,87 +111,121 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
             : "。実際の購入が行われます!"}
         </div>
       )}
-      <div className="card-grid">
-        <div className="card">
-          <div className="card-title">予測モデル</div>
-          <div className="metric">{data.model.trained ? "学習済み" : "未学習"}</div>
-          <div className="card-rows">
-            <div>
-              <span>バージョン</span>
-              <span>{data.model.version ?? "-"}</span>
-            </div>
-            <div>
-              <span>学習日時</span>
-              <span>{formatDateTime(data.model.trained_at)}</span>
-            </div>
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-title">収集データ</div>
-          <div className="metric">{data.data.race_count} レース</div>
-          <div className="card-rows">
-            <div>
-              <span>結果確定済み</span>
-              <span>{data.data.finished_race_count} レース</span>
-            </div>
-            <div>
-              <span>戦績取得済み馬</span>
-              <span>{data.data.horse_result_horse_count.toLocaleString()} 頭</span>
-            </div>
-            <div>
-              <span>戦績取得済み騎手</span>
-              <span>{data.data.jockey_result_jockey_count.toLocaleString()} 人</span>
-            </div>
-            <div>
-              <span>戦績取得済み調教師</span>
-              <span>{data.data.trainer_result_trainer_count.toLocaleString()} 人</span>
-            </div>
-            <div>
-              <span>発走前レース</span>
-              <span>{data.data.upcoming_race_count} 件</span>
-            </div>
-            <div>
-              <span>最終収集</span>
-              <span>{formatDateTime(data.data.last_collected_at)}</span>
+      <section className="overview-section">
+        <h2>レース / 予測モデル</h2>
+        <div className="card-grid">
+          <div className="card">
+            <div className="card-title">予測モデル</div>
+            <div className="metric">{data.model.trained ? "学習済み" : "未学習"}</div>
+            <div className="card-rows">
+              <div>
+                <span>バージョン</span>
+                <span>{data.model.version ?? "-"}</span>
+              </div>
+              <div>
+                <span>学習日時</span>
+                <span>{formatDateTime(data.model.trained_at)}</span>
+              </div>
+              <div>
+                <span>学習候補</span>
+                <span>{data.data.finished_race_count.toLocaleString()} レース</span>
+              </div>
+              <div>
+                <span>発走前予測済み</span>
+                <span>
+                  {data.data.predicted_upcoming_race_count.toLocaleString()} /{" "}
+                  {data.data.upcoming_race_count.toLocaleString()} 件
+                </span>
+              </div>
             </div>
           </div>
+          <DataCard
+            title="レース"
+            metric={`${data.data.race_count.toLocaleString()} レース`}
+            rows={[
+              { label: "結果確定済み", value: `${data.data.finished_race_count.toLocaleString()} レース` },
+              { label: "発走前", value: `${data.data.upcoming_race_count.toLocaleString()} 件` },
+              { label: "最終収集", value: formatDateTime(data.data.last_collected_at) },
+            ]}
+          />
         </div>
-        {data.modes.sim && <RecoveryCard mode="sim" stats={data.modes.sim} />}
-        {auth?.authenticated && data.modes.prod && <RecoveryCard mode="prod" stats={data.modes.prod} />}
-      </div>
+      </section>
 
-      <h2>ジョブの最終実行</h2>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>ジョブ</th>
-            <th>状態</th>
-            <th>実行種別</th>
-            <th>開始</th>
-            <th>結果</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.latest_jobs.length === 0 && (
+      <section className="overview-section">
+        <h2>戦績データ</h2>
+        <div className="card-grid">
+        <DataCard
+          title="馬の戦績"
+          metric={`${data.data.horse_result_horse_count.toLocaleString()} 頭`}
+          rows={[
+            { label: "収集対象", value: `${data.data.horse_target_count.toLocaleString()} 頭` },
+            { label: "収集済み", value: `${data.data.horse_result_horse_count.toLocaleString()} 頭` },
+            { label: "未収集", value: `${data.data.horse_uncollected_count.toLocaleString()} 頭` },
+          ]}
+        />
+        <DataCard
+          title="騎手の戦績"
+          metric={`${data.data.jockey_result_jockey_count.toLocaleString()} 人`}
+          rows={[
+            { label: "収集対象", value: `${data.data.jockey_target_count.toLocaleString()} 人` },
+            { label: "収集済み", value: `${data.data.jockey_result_jockey_count.toLocaleString()} 人` },
+            { label: "未収集", value: `${data.data.jockey_uncollected_count.toLocaleString()} 人` },
+          ]}
+        />
+        <DataCard
+          title="調教師の戦績"
+          metric={`${data.data.trainer_result_trainer_count.toLocaleString()} 人`}
+          rows={[
+            { label: "収集対象", value: `${data.data.trainer_target_count.toLocaleString()} 人` },
+            { label: "収集済み", value: `${data.data.trainer_result_trainer_count.toLocaleString()} 人` },
+            { label: "未収集", value: `${data.data.trainer_uncollected_count.toLocaleString()} 人` },
+          ]}
+        />
+        </div>
+      </section>
+
+      <section className="overview-section">
+        <h2>回収率</h2>
+        <div className="card-grid">
+          {data.modes.sim && <RecoveryCard mode="sim" stats={data.modes.sim} />}
+          {auth?.authenticated && data.modes.prod && <RecoveryCard mode="prod" stats={data.modes.prod} />}
+        </div>
+      </section>
+
+      <details className="collapsible-panel">
+        <summary>ジョブの最終実行</summary>
+        <table className="table">
+          <thead>
             <tr>
-              <td colSpan={5} className="muted">
-                まだ実行履歴がありません
-              </td>
+              <th>ジョブ</th>
+              <th>状態</th>
+              <th>実行種別</th>
+              <th>開始</th>
+              <th>結果</th>
             </tr>
-          )}
-          {data.latest_jobs.map((job) => (
-            <tr key={job.id}>
-              <td>{job.label}</td>
-              <td>
-                <StatusBadge status={job.status} />
-              </td>
-              <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
-              <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
-              <td className="detail-cell">{job.detail ?? "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.latest_jobs.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  まだ実行履歴がありません
+                </td>
+              </tr>
+            )}
+            {data.latest_jobs.map((job) => (
+              <tr key={job.id}>
+                <td>{job.label}</td>
+                <td>
+                  <StatusBadge status={job.status} />
+                </td>
+                <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
+                <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
+                <td className="detail-cell">{job.detail ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
     </div>
   );
 }

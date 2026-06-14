@@ -125,6 +125,17 @@ h2 {
   margin: 28px 0 12px;
 }
 
+.overview-section {
+  margin-bottom: 22px;
+}
+
+.overview-section > h2 {
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  margin: 20px 0 12px;
+  padding-bottom: 6px;
+}
+
 .loading,
 .muted {
   color: var(--text-muted);
@@ -149,6 +160,12 @@ h2 {
   margin-top: 14px;
 }
 
+.chart-card-embedded {
+  border: none;
+  margin-top: 10px;
+  padding: 0;
+}
+
 .card-title {
   color: var(--text-muted);
   font-size: 13px;
@@ -171,6 +188,84 @@ h2 {
 
 .card-rows > div span:last-child {
   color: var(--text);
+}
+
+.mini-stat-table {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 8px;
+}
+
+.mini-stat-table > div {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.mini-stat-table small {
+  color: var(--text-muted);
+}
+
+.compact-stats-table {
+  max-width: 760px;
+  margin-bottom: 18px;
+}
+
+.collapsible-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 12px 0 16px;
+  overflow: hidden;
+}
+
+.collapsible-panel > summary {
+  align-items: center;
+  background: var(--bg-hover);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  list-style: none;
+  padding: 10px 12px;
+  user-select: none;
+}
+
+.collapsible-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-panel > summary::after {
+  color: var(--text-muted);
+  content: "開く";
+  font-size: 12px;
+}
+
+.collapsible-panel[open] > summary::after {
+  content: "閉じる";
+}
+
+.collapsible-panel > .table,
+.collapsible-panel > .race-filters,
+.collapsible-panel > .chart-card {
+  border: none;
+  border-radius: 0;
+}
+
+.compact-detail-panel {
+  background: transparent;
+}
+
+.summary-pill {
+  background: rgba(79, 156, 249, 0.14);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+  margin-left: auto;
+  padding: 2px 8px;
 }
 
 /* テーブル */
@@ -512,6 +607,61 @@ h2 {
 
 .race-detail .table {
   min-width: 1080px;
+}
+
+.race-detail .compact-table {
+  min-width: 760px;
+}
+
+.bet-candidates {
+  margin: 10px 0 14px;
+}
+
+.bet-candidates-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.bet-candidates-header h4 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+
+.odds-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.odds-status-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.probability-kind {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.inline-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.inline-input input {
+  width: 120px;
+  min-height: 34px;
 }
 
 .race-bets {
