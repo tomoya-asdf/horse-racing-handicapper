@@ -8,6 +8,7 @@ import JobsPage from "./pages/Jobs";
 import SettingsPage from "./pages/Settings";
 import HorsePage from "./pages/Horse";
 import PersonPage from "./pages/Person";
+import ModelPage from "./pages/Model";
 import type { AuthStatus } from "./types";
 
 const TABS = [
@@ -93,7 +94,9 @@ export default function App() {
   const jockeyId = jockeyMatch ? decodeURIComponent(jockeyMatch[1]) : null;
   const trainerMatch = window.location.pathname.match(/^\/trainers\/([^/]+)$/);
   const trainerId = trainerMatch ? decodeURIComponent(trainerMatch[1]) : null;
-  const detailPageOpen = Boolean(horseId || jockeyId || trainerId);
+  const modelMatch = window.location.pathname.match(/^\/models\/([^/]+)$/);
+  const modelVersion = modelMatch ? decodeURIComponent(modelMatch[1]) : null;
+  const detailPageOpen = Boolean(horseId || jockeyId || trainerId || modelVersion);
   const visibleTabs = TABS.filter((t) => !t.adminOnly || auth?.authenticated);
 
   useEffect(() => {
@@ -169,6 +172,7 @@ export default function App() {
         {!showLogin && horseId && <HorsePage horseId={horseId} />}
         {!showLogin && jockeyId && <PersonPage kind="jockey" personId={jockeyId} />}
         {!showLogin && trainerId && <PersonPage kind="trainer" personId={trainerId} />}
+        {!showLogin && modelVersion && <ModelPage version={modelVersion} />}
         {!showLogin && !detailPageOpen && tab === "overview" && <OverviewPage auth={auth} />}
         {!showLogin && !detailPageOpen && tab === "races" && <RacesPage />}
         {!showLogin && !detailPageOpen && tab === "bets" && <BetsPage auth={auth} />}

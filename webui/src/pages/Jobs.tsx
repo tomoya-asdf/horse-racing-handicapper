@@ -184,21 +184,6 @@ export default function JobsPage() {
     }
   };
 
-  const restartSystem = async () => {
-    setMessage(null);
-    setActionError(null);
-    const ok = window.confirm(
-      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない環境では、手動コマンドが表示されます。"
-    );
-    if (!ok) return;
-    try {
-      await postJSON("/api/system/restart");
-      setMessage("再起動を依頼しました。数十秒後に画面を再読み込みしてください。");
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   return (
     <div>
       <h2>手動実行</h2>
@@ -503,17 +488,6 @@ export default function JobsPage() {
         }}
       />
 
-      <section className="danger-zone">
-        <div>
-          <h2>管理操作</h2>
-          <p className="muted">
-            システム全体の再起動は通常のジョブ実行とは別操作です。必要な時だけ実行してください。
-          </p>
-        </div>
-        <button className="secondary danger-outline" onClick={() => void restartSystem()}>
-          システム全体を再起動
-        </button>
-      </section>
     </div>
   );
 }

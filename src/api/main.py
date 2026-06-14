@@ -7,6 +7,7 @@
 """
 
 import logging
+import json
 import secrets
 import shutil
 import subprocess
@@ -38,6 +39,7 @@ from src.common.models import (
     Jockey,
     JockeyResult,
     JobRun,
+    ModelVersion,
     Prediction,
     Race,
     Trainer,
@@ -154,13 +156,24 @@ def _latest_prediction_model_version(session) -> str | None:
 
 
 def _model_info(session=None) -> dict:
+    latest_model = None
+    if session is not None:
+        latest_model = session.query(ModelVersion).order_by(ModelVersion.trained_at.desc()).first()
     if not MODEL_PATH.exists():
-        version = _latest_prediction_model_version(session) if session is not None else None
-        return {"trained": bool(version), "version": version, "trained_at": None}
+        version = latest_model.version if latest_model else (
+            _latest_prediction_model_version(session) if session is not None else None
+        )
+        return {
+            "trained": bool(version),
+            "version": version,
+            "trained_at": _iso(latest_model.trained_at) if latest_model else None,
+        }
     info = {
         "trained": True,
-        "version": _latest_prediction_model_version(session) if session is not None else None,
-        "trained_at": None,
+        "version": latest_model.version if latest_model else (
+            _latest_prediction_model_version(session) if session is not None else None
+        ),
+        "trained_at": _iso(latest_model.trained_at) if latest_model else None,
     }
     try:
         info["trained_at"] = datetime.fromtimestamp(MODEL_PATH.stat().st_mtime).isoformat()
@@ -172,9 +185,96 @@ def _model_info(session=None) -> dict:
 
             bundle = joblib.load(MODEL_PATH)
             info["version"] = bundle.get("version")
+        except ModuleNotFoundError as exc:
+            logger.info("model bundle metadata unavailable in api image: %s", exc)
         except Exception as exc:
             logger.warning("failed to read model bundle metadata: %s", exc)
     return info
+
+
+def _json_value(raw: str | None, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return default
+
+
+def _model_version_to_dict(model_version: ModelVersion) -> dict:
+    return {
+        "version": model_version.version,
+        "trained_at": _iso(model_version.trained_at),
+        "race_count": model_version.race_count,
+        "row_count": model_version.row_count,
+        "valid_race_count": model_version.valid_race_count,
+        "auc": model_version.auc,
+        "logloss": model_version.logloss,
+        "n_estimators": model_version.n_estimators,
+        "calibrated": bool(model_version.calibrated),
+        "feature_columns": _json_value(model_version.feature_columns, []),
+        "categorical_features": _json_value(model_version.categorical_features, []),
+        "feature_importances": _json_value(model_version.feature_importances, []),
+        "metrics": _json_value(model_version.metrics, {}),
+        "training_params": _json_value(model_version.training_params, {}),
+        "model_path": model_version.model_path,
+    }
+
+
+def _model_bundle_to_dict(bundle: dict, trained_at: datetime | None = None) -> dict:
+    return {
+        "version": bundle.get("version"),
+        "trained_at": _iso(trained_at),
+        "race_count": None,
+        "row_count": None,
+        "valid_race_count": None,
+        "auc": None,
+        "logloss": None,
+        "n_estimators": None,
+        "calibrated": bool(bundle.get("calibrator")),
+        "feature_columns": bundle.get("feature_columns", []),
+        "categorical_features": bundle.get("categorical_features", []),
+        "feature_importances": [],
+        "metrics": {},
+        "training_params": {},
+        "model_path": str(MODEL_PATH),
+    }
+
+
+def _minimal_model_version_dict(version: str) -> dict:
+    return {
+        "version": version,
+        "trained_at": None,
+        "race_count": None,
+        "row_count": None,
+        "valid_race_count": None,
+        "auc": None,
+        "logloss": None,
+        "n_estimators": None,
+        "calibrated": False,
+        "feature_columns": [],
+        "categorical_features": [],
+        "feature_importances": [],
+        "metrics": {},
+        "training_params": {},
+        "model_path": None,
+    }
+
+
+def _current_model_bundle_dict() -> dict | None:
+    if not MODEL_PATH.exists():
+        return None
+    try:
+        import joblib
+
+        trained_at = datetime.fromtimestamp(MODEL_PATH.stat().st_mtime)
+        return _model_bundle_to_dict(joblib.load(MODEL_PATH), trained_at)
+    except ModuleNotFoundError as exc:
+        logger.info("model bundle metadata unavailable in api image: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("failed to read model bundle metadata: %s", exc)
+        return None
 
 
 def _rank_entries(values: dict[int, float], reverse: bool = False) -> dict[int, int]:
@@ -358,6 +458,60 @@ def overview(request: Request) -> dict:
         "latest_jobs": latest_jobs,
         "settings": get_settings_view(include_env=False),
     }
+
+
+@app.get("/api/models")
+def list_models(limit: int = 30) -> dict:
+    session = get_session()
+    try:
+        rows = (
+            session.query(ModelVersion)
+            .order_by(ModelVersion.trained_at.desc(), ModelVersion.version.desc())
+            .limit(min(max(limit, 1), 100))
+            .all()
+        )
+        models = [_model_version_to_dict(row) for row in rows]
+        current = _current_model_bundle_dict()
+        if current and not any(row["version"] == current["version"] for row in models):
+            models.insert(0, current)
+        known_versions = {row["version"] for row in models}
+        prediction_versions = (
+            session.query(Prediction.model_version)
+            .filter(Prediction.model_version.isnot(None))
+            .distinct()
+            .order_by(Prediction.model_version.desc())
+            .limit(100)
+            .all()
+        )
+        for (version,) in prediction_versions:
+            if version not in known_versions:
+                models.append(_minimal_model_version_dict(version))
+                known_versions.add(version)
+        return {"models": models[: min(max(limit, 1), 100)]}
+    finally:
+        session.close()
+
+
+@app.get("/api/models/{version}")
+def model_detail(version: str) -> dict:
+    session = get_session()
+    try:
+        row = session.get(ModelVersion, version)
+        if row is None:
+            current = _current_model_bundle_dict()
+            if current and current["version"] == version:
+                return current
+            exists = (
+                session.query(Prediction.id)
+                .filter(Prediction.model_version == version)
+                .first()
+            )
+            if exists is not None:
+                return _minimal_model_version_dict(version)
+            raise HTTPException(status_code=404, detail="model version not found")
+        return _model_version_to_dict(row)
+    finally:
+        session.close()
 
 
 @app.get("/api/races")
@@ -699,6 +853,7 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "combination": b.combination,
                 "amount": b.amount,
                 "odds_at_bet": b.odds_at_bet,
+                "model_version": b.model_version,
                 "payout": b.payout,
                 "is_settled": b.is_settled,
                 "placed_at": _iso(b.placed_at),
@@ -950,6 +1105,7 @@ def list_bets(request: Request, mode: str = BettingMode.SIM.value) -> dict:
                     "status": b.status,
                     "amount": b.amount,
                     "odds_at_bet": b.odds_at_bet,
+                    "model_version": b.model_version,
                     "payout": b.payout,
                     "is_settled": b.is_settled,
                     "placed_at": _iso(b.placed_at),
@@ -1192,6 +1348,10 @@ if WEBUI_DIST.exists():
 
     @app.get("/trainers/{trainer_id}")
     def trainer_page(trainer_id: str) -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
+    @app.get("/models/{version}")
+    def model_page(version: str) -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
 
     app.mount("/", StaticFiles(directory=WEBUI_DIST, html=True), name="webui")

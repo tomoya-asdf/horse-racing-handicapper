@@ -208,6 +208,44 @@ h2 {
   color: var(--text-muted);
 }
 
+.model-version-text {
+  margin: -4px 0 0;
+  word-break: break-word;
+}
+
+.feature-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feature-chip {
+  background: rgba(139, 152, 169, 0.15);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+.feature-chip-accent {
+  background: rgba(79, 156, 249, 0.14);
+  color: var(--accent);
+}
+
+.json-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
 .compact-stats-table {
   max-width: 760px;
   margin-bottom: 18px;

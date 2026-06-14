@@ -15,7 +15,7 @@ collector
   v
 PostgreSQL
   ^
-  | predictions, bets, job_runs, job_reservations, app_settings
+  | predictions, model_versions, bets, job_runs, job_reservations, app_settings
   |
 predictor  <---- model.pkl
   ^
@@ -68,8 +68,11 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 - 買い目一覧
 - ジョブ
 - 設定
+- モデル詳細
 
-ジョブページは手動実行、バックフィル、バックテスト、ジョブ予約、予約一覧、実行履歴を扱います。定期実行設定は設定ページで扱います。
+概要、レース詳細、買い目一覧に表示されるモデルバージョンはモデル詳細ページへリンクします。モデル詳細ページでは学習日時、評価指標、使用特徴量、カテゴリ特徴量、特徴量重要度、学習パラメータを表示します。
+
+ジョブページは手動実行、バックフィル、バックテスト、ジョブ予約、予約一覧、実行履歴を扱います。定期実行設定とシステム再起動操作は設定ページで扱います。
 
 ## データモデル
 
@@ -125,6 +128,27 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 出走馬ごとの予測スコアです。`entry_id` と `model_version` の組み合わせで管理します。同じモデルバージョンの予測が既にある場合は重複保存しません。
 
+### model_versions
+
+学習した予測モデルのメタデータです。`version` は `KByyyyMMdd-HHmmss` 形式です。
+
+| カラム | 内容 |
+| --- | --- |
+| `version` | モデルバージョン |
+| `trained_at` | 学習日時 |
+| `race_count` / `row_count` / `valid_race_count` | 学習に使ったレース数、行数、検証レース数 |
+| `auc` / `logloss` | 検証指標 |
+| `n_estimators` | 学習後の推定器数 |
+| `calibrated` | 校正器を作成できたか |
+| `feature_columns` | 使用特徴量一覧(JSON) |
+| `categorical_features` | カテゴリ特徴量一覧(JSON) |
+| `feature_importances` | 特徴量重要度(JSON) |
+| `metrics` | 追加評価指標(JSON) |
+| `training_params` | 学習パラメータ(JSON) |
+| `model_path` | モデルファイルパス |
+
+特徴量や評価指標は今後増減する可能性があるため、可変項目は JSON として保存します。既存の古い予測だけに残っているモデルバージョンは、詳細メタデータがない最小情報として Web UI に表示します。
+
 ### bets
 
 作成された買い目です。
@@ -138,6 +162,7 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 | `combination` | 馬連などの組み合わせ |
 | `amount` | 購入金額 |
 | `odds_at_bet` | 判定時オッズ |
+| `model_version` | 買い目判定の根拠になった予測モデルバージョン |
 | `payout` | 払戻 |
 | `is_settled` | 精算済みか |
 
@@ -290,7 +315,8 @@ Web UI で変更できる主な設定:
 3. LightGBM の二値分類モデルを学習します。
 4. 検証データで early stopping します。
 5. 検証データの確率で `IsotonicRegression` による校正器を作ります。
-6. 全データで最終モデルを学習し、モデル、特徴量一覧、カテゴリ特徴量、校正器、バージョンを `/app/data/model.pkl` に保存します。
+6. 全データで最終モデルを学習し、モデル、特徴量一覧、カテゴリ特徴量、校正器、`KB` 付きバージョンを `/app/data/model.pkl` に保存します。
+7. 評価指標、特徴量一覧、特徴量重要度、学習パラメータを `model_versions` に保存します。
 
 予測時は最新モデルを読み込み、未確定の今後レースに対して `predictions` を保存します。
 
@@ -323,7 +349,7 @@ Web UI で変更できる主な設定:
 
 期待値を満たす候補は期待値順に並べ、1 レース最大 3 点まで 100 円単位で配分します。レース詳細画面では、出走馬順位表の下、購入済み買い目表示の上に、買い目候補とオッズ取得状況を常時表示します。
 
-同じレース、同じモードの買い目は重複して作成しません。
+同じレース、同じモードの買い目は重複して作成しません。買い目には判定時に使った予測の `model_version` を保存し、Web UI の買い目一覧やレース詳細からモデル詳細を確認できます。
 
 ## Web API
 
@@ -333,6 +359,8 @@ Web UI で変更できる主な設定:
 - `GET /api/races/{race_id}`
 - `GET /api/horses/{horse_id}`
 - `GET /api/bets`
+- `GET /api/models`
+- `GET /api/models/{version}`
 - `GET /api/jobs`
 - `POST /api/jobs/{job_name}/run`
 - `POST /api/job-reservations`

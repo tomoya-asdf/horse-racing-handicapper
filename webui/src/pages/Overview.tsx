@@ -120,7 +120,20 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
             <div className="card-rows">
               <div>
                 <span>バージョン</span>
-                <span>{data.model.version ?? "-"}</span>
+                <span>
+                  {data.model.version ? (
+                    <a
+                      className="link-button"
+                      href={`/models/${encodeURIComponent(data.model.version)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {data.model.version}
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </span>
               </div>
               <div>
                 <span>学習日時</span>

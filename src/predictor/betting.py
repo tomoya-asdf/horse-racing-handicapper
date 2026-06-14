@@ -95,6 +95,14 @@ def decide_bets(
 
     candidates = build_bet_candidates(race, predictions, config, odds_by_type)
     selected = allocate_candidates(candidates, config.amount * MAX_BETS_PER_RACE)
+    model_version = next(
+        (
+            getattr(p, "model_version", None)
+            for p in predictions
+            if getattr(p, "model_version", None)
+        ),
+        None,
+    )
     return [
         Bet(
             race_id=race.id,
@@ -104,6 +112,7 @@ def decide_bets(
             combination=None if c.bet_type in (BET_TYPE_WIN, BET_TYPE_PLACE) else c.combination,
             amount=c.amount or config.amount,
             odds_at_bet=c.odds,
+            model_version=model_version,
             is_settled=False,
         )
         for c in selected

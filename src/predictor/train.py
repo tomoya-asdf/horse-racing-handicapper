@@ -8,6 +8,7 @@ DBに蓄積された確定済みレース(entries.finish_position が設定済�
 """
 
 import logging
+import json
 from datetime import date, datetime
 
 import joblib
@@ -17,7 +18,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import log_loss, roc_auc_score
 
 from src.common.db import get_session, init_db
-from src.common.models import Entry, Race
+from src.common.models import Entry, ModelVersion, Race
 from src.common.paths import MODEL_PATH
 from src.predictor.features import CATEGORICAL_FEATURES, FEATURE_COLUMNS, build_features
 from src.predictor.history import (
@@ -174,7 +175,7 @@ def build_model_bundle(frames: list[pd.DataFrame]) -> tuple[dict | None, dict]:
         "feature_columns": FEATURE_COLUMNS,
         "categorical_features": CATEGORICAL_FEATURES,
         "calibrator": calibrator,
-        "version": datetime.now().strftime("%Y%m%d-%H%M%S"),
+        "version": datetime.now().strftime("KB%Y%m%d-%H%M%S"),
     }
     metrics.update(
         {
@@ -186,6 +187,57 @@ def build_model_bundle(frames: list[pd.DataFrame]) -> tuple[dict | None, dict]:
         }
     )
     return bundle, metrics
+
+
+def _feature_importances(bundle: dict) -> list[dict]:
+    model = bundle["model"]
+    importances = getattr(model, "feature_importances_", None)
+    if importances is None:
+        return []
+    rows = [
+        {"name": name, "importance": int(value)}
+        for name, value in zip(bundle["feature_columns"], importances)
+    ]
+    return sorted(rows, key=lambda row: row["importance"], reverse=True)
+
+
+def _save_model_version(bundle: dict, metrics: dict, race_count: int) -> None:
+    session = get_session()
+    try:
+        row = session.get(ModelVersion, bundle["version"])
+        if row is None:
+            row = ModelVersion(version=bundle["version"])
+            session.add(row)
+        version_timestamp = (
+            bundle["version"][2:] if bundle["version"].startswith("KB") else bundle["version"]
+        )
+        row.trained_at = datetime.strptime(version_timestamp, "%Y%m%d-%H%M%S")
+        row.race_count = race_count
+        row.row_count = metrics["rows"]
+        row.valid_race_count = metrics["valid_races"]
+        row.auc = metrics["auc"]
+        row.logloss = metrics["logloss"]
+        row.n_estimators = metrics["n_estimators"]
+        row.calibrated = metrics["calibrated"]
+        row.feature_columns = json.dumps(bundle["feature_columns"], ensure_ascii=False)
+        row.categorical_features = json.dumps(bundle["categorical_features"], ensure_ascii=False)
+        row.feature_importances = json.dumps(_feature_importances(bundle), ensure_ascii=False)
+        row.metrics = json.dumps(metrics, ensure_ascii=False)
+        row.training_params = json.dumps(
+            {
+                "objective": "binary",
+                "valid_fraction": VALID_FRACTION,
+                "early_stopping_rounds": EARLY_STOPPING_ROUNDS,
+                "max_boost_rounds": MAX_BOOST_ROUNDS,
+                "default_boost_rounds": DEFAULT_BOOST_ROUNDS,
+                "random_state": 42,
+            },
+            ensure_ascii=False,
+        )
+        row.model_path = str(MODEL_PATH)
+        session.commit()
+    finally:
+        session.close()
 
 
 def train_model() -> str:
@@ -201,6 +253,7 @@ def train_model() -> str:
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, MODEL_PATH)
+    _save_model_version(bundle, metrics, race_count)
 
     summary = (
         f"モデルを保存しました(version={bundle['version']}, レース={race_count}件, "

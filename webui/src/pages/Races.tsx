@@ -186,7 +186,19 @@ function RaceDetailView({ raceId }: { raceId: number }) {
   return (
     <div className="race-detail">
       {formatConditions(data) && <p className="race-conditions">{formatConditions(data)}</p>}
-      {data.model_version && <p className="muted">予測モデル: {data.model_version}</p>}
+      {data.model_version && (
+        <p className="muted">
+          予測モデル:{" "}
+          <a
+            className="link-button"
+            href={`/models/${encodeURIComponent(data.model_version)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {data.model_version}
+          </a>
+        </p>
+      )}
       {data.analysis.top_ai.length > 0 && (
         <div className="race-ai-summary">
           <div className="race-ai-status">
@@ -363,6 +375,20 @@ function RaceDetailView({ raceId }: { raceId: number }) {
               <span>
                 {b.bet_type} {b.combination ? b.combination : `${b.horse_number}番`} /{" "}
                 {b.amount.toLocaleString()}円
+                {b.model_version && (
+                  <>
+                    {" "}
+                    / モデル{" "}
+                    <a
+                      className="link-button"
+                      href={`/models/${encodeURIComponent(b.model_version)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {b.model_version}
+                    </a>
+                  </>
+                )}
                 {b.is_settled && ` → 払戻 ${Math.round(b.payout ?? 0).toLocaleString()}円`}
               </span>
             </div>

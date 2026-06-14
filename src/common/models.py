@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -234,6 +235,28 @@ class Prediction(Base):
     race = relationship("Race", back_populates="predictions")
 
 
+class ModelVersion(Base):
+    """学習済みモデルの評価指標・特徴量スナップショット。"""
+
+    __tablename__ = "model_versions"
+
+    version = Column(String, primary_key=True)
+    trained_at = Column(DateTime, default=now_jst)
+    race_count = Column(Integer)
+    row_count = Column(Integer)
+    valid_race_count = Column(Integer)
+    auc = Column(Float)
+    logloss = Column(Float)
+    n_estimators = Column(Integer)
+    calibrated = Column(Boolean, default=False)
+    feature_columns = Column(Text)
+    categorical_features = Column(Text)
+    feature_importances = Column(Text)
+    metrics = Column(Text)
+    training_params = Column(Text)
+    model_path = Column(String)
+
+
 class JobTrigger(str, Enum):
     SCHEDULED = "scheduled"
     MANUAL = "manual"
@@ -306,6 +329,7 @@ class Bet(Base):
     combination = Column(String)
     amount = Column(Float, nullable=False)
     odds_at_bet = Column(Float)
+    model_version = Column(String)
     payout = Column(Float)
     is_settled = Column(Boolean, default=False)
     placed_at = Column(DateTime, default=now_jst)

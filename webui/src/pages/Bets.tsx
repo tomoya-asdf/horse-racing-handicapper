@@ -175,6 +175,7 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
                 <th>馬</th>
                 <th>式別</th>
                 <th>状態</th>
+                <th>モデル</th>
                 <th>金額</th>
                 <th>オッズ</th>
                 <th>払戻</th>
@@ -183,7 +184,7 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
             <tbody>
               {data.bets.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="muted">
+                  <td colSpan={9} className="muted">
                     賭けデータがまだありません
                   </td>
                 </tr>
@@ -202,6 +203,20 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
                     <StatusBadge status={b.status} />
                     {b.status === "placed" && !b.is_settled && (
                       <span className="muted"> (未決済)</span>
+                    )}
+                  </td>
+                  <td>
+                    {b.model_version ? (
+                      <a
+                        className="link-button"
+                        href={`/models/${encodeURIComponent(b.model_version)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {b.model_version}
+                      </a>
+                    ) : (
+                      "-"
                     )}
                   </td>
                   <td>{formatYen(b.amount)}</td>

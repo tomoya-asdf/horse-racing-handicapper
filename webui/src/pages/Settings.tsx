@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatDateTime, getJSON, putJSON } from "../api";
+import { formatDateTime, getJSON, postJSON, putJSON } from "../api";
 import { ErrorNote } from "../components";
 import type { ScheduledJobSetting, SettingsView } from "../types";
 
@@ -131,6 +131,21 @@ export default function SettingsPage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const restartSystem = async () => {
+    setError(null);
+    setMessage(null);
+    const ok = window.confirm(
+      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない環境では、手動コマンドが表示されます。"
+    );
+    if (!ok) return;
+    try {
+      await postJSON("/api/system/restart");
+      setMessage("再起動を依頼しました。数十秒後に画面を再読み込みしてください。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -326,6 +341,18 @@ export default function SettingsPage() {
           </table>
         </details>
       )}
+
+      <section className="danger-zone settings-restart-section">
+        <div>
+          <h2>管理操作</h2>
+          <p className="muted">
+            システム全体の再起動は通常の設定保存とは別操作です。必要な時だけ実行してください。
+          </p>
+        </div>
+        <button className="secondary danger-outline" onClick={() => void restartSystem()}>
+          システム全体を再起動
+        </button>
+      </section>
     </div>
   );
 }

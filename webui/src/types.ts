@@ -146,6 +146,29 @@ export interface Overview {
   settings: SettingsView;
 }
 
+export interface ModelFeatureImportance {
+  name: string;
+  importance: number;
+}
+
+export interface ModelVersionDetail {
+  version: string;
+  trained_at: string | null;
+  race_count: number | null;
+  row_count: number | null;
+  valid_race_count: number | null;
+  auc: number | null;
+  logloss: number | null;
+  n_estimators: number | null;
+  calibrated: boolean;
+  feature_columns: string[];
+  categorical_features: string[];
+  feature_importances: ModelFeatureImportance[];
+  metrics: Record<string, unknown>;
+  training_params: Record<string, unknown>;
+  model_path: string | null;
+}
+
 export interface TopPrediction {
   horse_number: number | null;
   horse_id: string | null;
@@ -272,6 +295,7 @@ export interface RaceBet {
   combination: string | null;
   amount: number;
   odds_at_bet: number | null;
+  model_version: string | null;
   payout: number | null;
   is_settled: boolean;
   placed_at: string | null;
@@ -357,6 +381,7 @@ export interface BetItem {
   status: string;
   amount: number;
   odds_at_bet: number | null;
+  model_version: string | null;
   payout: number | null;
   is_settled: boolean;
   placed_at: string | null;

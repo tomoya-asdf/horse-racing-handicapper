@@ -32,6 +32,7 @@ _MIGRATIONS = (
     "ALTER TABLE horses ADD COLUMN IF NOT EXISTS sire_id VARCHAR",
     "ALTER TABLE horses ADD COLUMN IF NOT EXISTS sire_name VARCHAR",
     "ALTER TABLE bets ADD COLUMN IF NOT EXISTS combination VARCHAR",
+    "ALTER TABLE bets ADD COLUMN IF NOT EXISTS model_version VARCHAR",
     "CREATE INDEX IF NOT EXISTS ix_jockey_results_jockey_id ON jockey_results (jockey_id)",
     "CREATE INDEX IF NOT EXISTS ix_trainer_results_trainer_id ON trainer_results (trainer_id)",
 )
