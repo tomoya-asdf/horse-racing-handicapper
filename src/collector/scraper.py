@@ -323,67 +323,11 @@ def _parse_row_odds(row) -> tuple[float | None, int | None]:
 
 
 def _needs_rendered_odds(entries: list[dict]) -> bool:
-    return any(e.get("odds") is None or e.get("popularity") is None for e in entries)
+    return any(e.get("odds") is None for e in entries)
 
 
-def _fetch_rendered_win_odds(race_id: str) -> dict[int, dict[str, float | int]]:
-    """Use a real browser to read pre-race odds/popularity after netkeiba JS updates the page.
-
-    The normal requests path is cheaper and remains the default. This function is a fallback for
-    races where the static HTML/API does not expose values that are visible in a browser.
-    """
-    try:
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
-        return {}
-
+def _parse_rendered_odds_values(values) -> dict[int, dict[str, float | int]]:
     rendered: dict[int, dict[str, float | int]] = {}
-    url = f"{BASE_URL}/race/shutuba.html?race_id={race_id}"
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-            try:
-                page = browser.new_page(user_agent=USER_AGENT, locale="ja-JP", timezone_id="Asia/Tokyo")
-                page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                try:
-                    page.wait_for_function(
-                        """() => Array.from(document.querySelectorAll('span[id^="odds-"], span[id^="ninki-"]'))
-                            .some((el) => /^\\d+(?:\\.\\d+)?$/.test((el.textContent || '').trim()))""",
-                        timeout=8000,
-                    )
-                except PlaywrightTimeoutError:
-                    logger.info("rendered odds did not appear before timeout: race_id=%s", race_id)
-
-                values = page.evaluate(
-                    """() => {
-                        const byHorse = {};
-                        const put = (id, key, raw) => {
-                            const match = /_(\\d+)$/.exec(id || '');
-                            if (!match) return;
-                            const horseNumber = Number(match[1]);
-                            const text = (raw || '').trim();
-                            if (!byHorse[horseNumber]) byHorse[horseNumber] = {};
-                            byHorse[horseNumber][key] = text;
-                        };
-                        document.querySelectorAll('span[id^="odds-"]').forEach((el) => {
-                            put(el.id, 'odds', el.textContent);
-                        });
-                        document.querySelectorAll('span[id^="ninki-"]').forEach((el) => {
-                            put(el.id, 'popularity', el.textContent);
-                        });
-                        return byHorse;
-                    }"""
-                )
-            finally:
-                browser.close()
-    except Exception as exc:
-        logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
-        return {}
-    finally:
-        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
-
     if not isinstance(values, dict):
         return {}
     for horse_number_text, row in values.items():
@@ -403,6 +347,82 @@ def _fetch_rendered_win_odds(race_id: str) -> dict[int, dict[str, float | int]]:
         if item:
             rendered[horse_number] = item
     return rendered
+
+
+def _read_rendered_win_odds(page, race_id: str) -> dict[int, dict[str, float | int]]:
+    """Read pre-race odds/popularity from an already-open Playwright page."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    url = f"{BASE_URL}/race/shutuba.html?race_id={race_id}"
+    page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    try:
+        page.wait_for_function(
+            """() => Array.from(document.querySelectorAll('span[id^="odds-"], span[id^="ninki-"]'))
+                .some((el) => /^\\d+(?:\\.\\d+)?$/.test((el.textContent || '').trim()))""",
+            timeout=5000,
+        )
+    except PlaywrightTimeoutError:
+        logger.info("rendered odds did not appear before timeout: race_id=%s", race_id)
+
+    values = page.evaluate(
+        """() => {
+            const byHorse = {};
+            const put = (id, key, raw) => {
+                const match = /_(\\d+)$/.exec(id || '');
+                if (!match) return;
+                const horseNumber = Number(match[1]);
+                const text = (raw || '').trim();
+                if (!byHorse[horseNumber]) byHorse[horseNumber] = {};
+                byHorse[horseNumber][key] = text;
+            };
+            document.querySelectorAll('span[id^="odds-"]').forEach((el) => {
+                put(el.id, 'odds', el.textContent);
+            });
+            document.querySelectorAll('span[id^="ninki-"]').forEach((el) => {
+                put(el.id, 'popularity', el.textContent);
+            });
+            return byHorse;
+        }"""
+    )
+    return _parse_rendered_odds_values(values)
+
+
+def _new_rendered_page(browser):
+    page = browser.new_page(user_agent=USER_AGENT, locale="ja-JP", timezone_id="Asia/Tokyo")
+    page.route(
+        "**/*",
+        lambda route: route.abort()
+        if route.request.resource_type in {"image", "stylesheet", "font"}
+        else route.continue_(),
+    )
+    return page
+
+
+def _fetch_rendered_win_odds(race_id: str) -> dict[int, dict[str, float | int]]:
+    """Use a real browser to read pre-race odds/popularity after netkeiba JS updates the page.
+
+    The normal requests path is cheaper and remains the default. This function is a fallback for
+    races where the static HTML/API does not expose values that are visible in a browser.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
+        return {}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                page = _new_rendered_page(browser)
+                return _read_rendered_win_odds(page, race_id)
+            finally:
+                browser.close()
+    except Exception as exc:
+        logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
+        return {}
+    finally:
+        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
 
 
 def _parse_entry_rows(soup: BeautifulSoup) -> list[dict]:
@@ -600,57 +620,82 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
     """
     now = now_jst()
     races: list[dict] = []
+    playwright = None
+    browser = None
+    page = None
 
-    for race_id in _find_race_ids(target_date):
-        try:
-            response = _get(f"{BASE_URL}/race/shutuba.html", params={"race_id": race_id})
-            soup = BeautifulSoup(response.text, "html.parser")
+    try:
+        for race_id in _find_race_ids(target_date):
+            try:
+                response = _get(f"{BASE_URL}/race/shutuba.html", params={"race_id": race_id})
+                soup = BeautifulSoup(response.text, "html.parser")
 
-            entries = _parse_entry_rows(soup)
-            if not entries:
-                logger.warning("no entries parsed for race_id=%s, skip", race_id)
-                continue
+                entries = _parse_entry_rows(soup)
+                if not entries:
+                    logger.warning("no entries parsed for race_id=%s, skip", race_id)
+                    continue
 
-            start_time = _parse_start_time(soup, target_date)
-            if not include_started and start_time is not None and start_time <= now:
-                continue
+                start_time = _parse_start_time(soup, target_date)
+                if not include_started and start_time is not None and start_time <= now:
+                    continue
 
-            # オッズは2系統: JRAオッズAPI(発走当日に確定値が出る)を最優先とし、
-            # まだ確定オッズが無い未確定レースでは出馬表の予想オッズ(_parse_row_oddsで
-            # 取得済み)を残す。これで数日先のレースでも予想オッズ/予想人気が入る。
-            odds_map = _fetch_win_odds(race_id)
-            for entry in entries:
-                api_odds = odds_map.get(f"{entry['horse_number']:02d}")
-                if api_odds is not None:
-                    entry["odds"] = api_odds
-            if _needs_rendered_odds(entries):
-                rendered_odds = _fetch_rendered_win_odds(race_id)
+                # オッズは2系統: JRAオッズAPI(発走当日に確定値が出る)を最優先とし、
+                # まだ確定オッズが無い未確定レースでは出馬表の予想オッズ(_parse_row_oddsで
+                # 取得済み)を残す。人気だけ欠ける場合はオッズ順で補完し、ブラウザ描画は
+                # オッズ自体が欠けている時だけ使う。
+                odds_map = _fetch_win_odds(race_id)
                 for entry in entries:
-                    rendered_entry = rendered_odds.get(entry["horse_number"])
-                    if not rendered_entry:
-                        continue
-                    if rendered_entry.get("odds") is not None:
-                        entry["odds"] = rendered_entry["odds"]
-                    if rendered_entry.get("popularity") is not None:
-                        entry["popularity"] = rendered_entry["popularity"]
-            _fill_popularity(entries)
+                    api_odds = odds_map.get(f"{entry['horse_number']:02d}")
+                    if api_odds is not None:
+                        entry["odds"] = api_odds
+                _fill_popularity(entries)
 
-            info = parse_race_key(race_id)
-            races.append(
-                {
-                    "race_key": race_id,
-                    "race_date": target_date,
-                    "venue": info["venue"],
-                    "race_number": info["race_number"],
-                    "race_name": _parse_race_name(soup),
-                    "start_time": start_time,
-                    "entries": entries,
-                    **_parse_race_conditions(soup),
-                }
-            )
-        except requests.RequestException as exc:
-            logger.warning("failed to fetch race_id=%s: %s", race_id, exc)
-            continue
+                if _needs_rendered_odds(entries):
+                    rendered_odds = {}
+                    try:
+                        if page is None:
+                            from playwright.sync_api import sync_playwright
+
+                            playwright = sync_playwright().start()
+                            browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+                            page = _new_rendered_page(browser)
+                        rendered_odds = _read_rendered_win_odds(page, race_id)
+                        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
+                    except ImportError:
+                        logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
+                    except Exception as exc:
+                        logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
+                    for entry in entries:
+                        rendered_entry = rendered_odds.get(entry["horse_number"])
+                        if not rendered_entry:
+                            continue
+                        if rendered_entry.get("odds") is not None:
+                            entry["odds"] = rendered_entry["odds"]
+                        if rendered_entry.get("popularity") is not None:
+                            entry["popularity"] = rendered_entry["popularity"]
+                    _fill_popularity(entries)
+
+                info = parse_race_key(race_id)
+                races.append(
+                    {
+                        "race_key": race_id,
+                        "race_date": target_date,
+                        "venue": info["venue"],
+                        "race_number": info["race_number"],
+                        "race_name": _parse_race_name(soup),
+                        "start_time": start_time,
+                        "entries": entries,
+                        **_parse_race_conditions(soup),
+                    }
+                )
+            except requests.RequestException as exc:
+                logger.warning("failed to fetch race_id=%s: %s", race_id, exc)
+                continue
+    finally:
+        if browser is not None:
+            browser.close()
+        if playwright is not None:
+            playwright.stop()
 
     return races
 
