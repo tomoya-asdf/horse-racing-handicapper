@@ -103,21 +103,37 @@ def _job_to_dict(run: JobRun) -> dict:
     }
 
 
-def _model_info() -> dict:
-    if not MODEL_PATH.exists():
-        return {"trained": False, "version": None, "trained_at": None}
-    info = {"trained": True, "version": None, "trained_at": None}
-    try:
-        import joblib
+def _latest_prediction_model_version(session) -> str | None:
+    row = (
+        session.query(Prediction.model_version)
+        .filter(Prediction.model_version.isnot(None))
+        .order_by(Prediction.created_at.desc(), Prediction.id.desc())
+        .first()
+    )
+    return row[0] if row else None
 
-        bundle = joblib.load(MODEL_PATH)
-        info["version"] = bundle.get("version")
-    except Exception:
-        logger.exception("failed to load model bundle")
+
+def _model_info(session=None) -> dict:
+    if not MODEL_PATH.exists():
+        version = _latest_prediction_model_version(session) if session is not None else None
+        return {"trained": bool(version), "version": version, "trained_at": None}
+    info = {
+        "trained": True,
+        "version": _latest_prediction_model_version(session) if session is not None else None,
+        "trained_at": None,
+    }
     try:
         info["trained_at"] = datetime.fromtimestamp(MODEL_PATH.stat().st_mtime).isoformat()
     except OSError:
         pass
+    if info["version"] is None:
+        try:
+            import joblib
+
+            bundle = joblib.load(MODEL_PATH)
+            info["version"] = bundle.get("version")
+        except Exception as exc:
+            logger.warning("failed to read model bundle metadata: %s", exc)
     return info
 
 
@@ -190,7 +206,8 @@ def auth_logout(request: Request, response: Response) -> dict:
 
 
 @app.get("/api/overview")
-def overview() -> dict:
+def overview(request: Request) -> dict:
+    is_admin = _is_admin_request(request)
     session = get_session()
     try:
         race_count = session.query(func.count(Race.id)).scalar() or 0
@@ -212,7 +229,10 @@ def overview() -> dict:
         )
 
         modes = {}
-        for mode in (BettingMode.SIM.value, BettingMode.PROD.value):
+        visible_modes = [BettingMode.SIM.value]
+        if is_admin:
+            visible_modes.append(BettingMode.PROD.value)
+        for mode in visible_modes:
             bets = session.query(Bet).filter(Bet.mode == mode).all()
             modes[mode] = _bet_stats(bets)
 
@@ -226,11 +246,12 @@ def overview() -> dict:
             )
             if run is not None:
                 latest_jobs.append(_job_to_dict(run))
+        model_info = _model_info(session)
     finally:
         session.close()
 
     return {
-        "model": _model_info(),
+        "model": model_info,
         "data": {
             "race_count": race_count,
             "finished_race_count": finished_race_count,
@@ -246,6 +267,7 @@ def overview() -> dict:
 
 @app.get("/api/races")
 def list_races(
+    request: Request,
     limit: int = 30,
     offset: int = 0,
     race_name: str | None = None,
@@ -258,6 +280,7 @@ def list_races(
     prediction: str | None = None,
     bet: str | None = None,
 ) -> dict:
+    is_admin = _is_admin_request(request)
     page_limit = min(max(limit, 1), 200)
     page_offset = max(offset, 0)
     session = get_session()
@@ -304,9 +327,17 @@ def list_races(
         elif prediction == "no":
             query = query.filter(~Race.predictions.any())
         if bet == "yes":
-            query = query.filter(Race.bets.any())
+            query = query.filter(
+                Race.bets.any()
+                if is_admin
+                else Race.bets.any(Bet.mode == BettingMode.SIM.value)
+            )
         elif bet == "no":
-            query = query.filter(~Race.bets.any())
+            query = query.filter(
+                ~Race.bets.any()
+                if is_admin
+                else ~Race.bets.any(Bet.mode == BettingMode.SIM.value)
+            )
 
         query = query.distinct()
         total = query.with_entities(func.count(func.distinct(Race.id))).scalar() or 0
@@ -356,7 +387,9 @@ def list_races(
                     "entry_count": len(race.entries),
                     "finished": any(e.finish_position is not None for e in race.entries),
                     "top_prediction": top,
-                    "bet_count": len(race.bets),
+                    "bet_count": len(
+                        [b for b in race.bets if is_admin or b.mode != BettingMode.PROD.value]
+                    ),
                 }
             )
     finally:
@@ -371,7 +404,8 @@ def list_races(
 
 
 @app.get("/api/races/{race_id}")
-def race_detail(race_id: int) -> dict:
+def race_detail(request: Request, race_id: int) -> dict:
+    is_admin = _is_admin_request(request)
     session = get_session()
     try:
         race = (
@@ -397,7 +431,8 @@ def race_detail(race_id: int) -> dict:
                 for p in race.predictions
                 if p.model_version == model_version
             }
-        bet_entry_ids = {b.entry_id for b in race.bets}
+        visible_bets = [b for b in race.bets if is_admin or b.mode != BettingMode.PROD.value]
+        bet_entry_ids = {b.entry_id for b in visible_bets}
         betting_config = load_betting_config()
         ai_rank_map = _rank_entries(score_map, reverse=True)
         odds_rank_map = _rank_entries(
@@ -496,7 +531,7 @@ def race_detail(race_id: int) -> dict:
                 "is_settled": b.is_settled,
                 "placed_at": _iso(b.placed_at),
             }
-            for b in race.bets
+            for b in visible_bets
         ]
         return {
             "id": race.id,
@@ -585,9 +620,11 @@ def horse_detail(horse_id: str) -> dict:
 
 
 @app.get("/api/bets")
-def list_bets(mode: str = BettingMode.SIM.value) -> dict:
+def list_bets(request: Request, mode: str = BettingMode.SIM.value) -> dict:
     if mode not in (BettingMode.SIM.value, BettingMode.PROD.value):
         raise HTTPException(status_code=400, detail="mode は 'sim' か 'prod' を指定してください")
+    if mode == BettingMode.PROD.value and not _is_admin_request(request):
+        require_admin(request)
 
     session = get_session()
     try:

@@ -161,9 +161,9 @@ export default function App() {
           />
         )}
         {!showLogin && horseId && <HorsePage horseId={horseId} />}
-        {!showLogin && !horseId && tab === "overview" && <OverviewPage />}
+        {!showLogin && !horseId && tab === "overview" && <OverviewPage auth={auth} />}
         {!showLogin && !horseId && tab === "races" && <RacesPage />}
-        {!showLogin && !horseId && tab === "bets" && <BetsPage />}
+        {!showLogin && !horseId && tab === "bets" && <BetsPage auth={auth} />}
         {!showLogin && !horseId && auth?.authenticated && tab === "jobs" && <JobsPage />}
         {!showLogin && !horseId && auth?.authenticated && tab === "settings" && <SettingsPage />}
       </main>

@@ -98,7 +98,7 @@ export interface Overview {
     upcoming_race_count: number;
     last_collected_at: string | null;
   };
-  modes: Record<string, BetStats>;
+  modes: Partial<Record<"sim" | "prod", BetStats>>;
   latest_jobs: JobRun[];
   settings: SettingsView;
 }

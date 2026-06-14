@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -11,10 +11,18 @@ import {
 } from "recharts";
 import { getJSON, formatDateTime, formatYen } from "../api";
 import { ErrorNote, StatusBadge, usePolling } from "../components";
-import type { BetsResponse } from "../types";
+import type { AuthStatus, BetsResponse } from "../types";
 
-export default function BetsPage() {
+export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
   const [mode, setMode] = useState<"sim" | "prod">("sim");
+  const canViewProd = Boolean(auth?.authenticated);
+
+  useEffect(() => {
+    if (!canViewProd && mode === "prod") {
+      setMode("sim");
+    }
+  }, [canViewProd, mode]);
+
   const { data, error } = usePolling<BetsResponse>(
     () => getJSON(`/api/bets?mode=${mode}`),
     15000,
@@ -29,7 +37,11 @@ export default function BetsPage() {
           <button className={mode === "sim" ? "active" : ""} onClick={() => setMode("sim")}>
             シミュレーション
           </button>
-          <button className={mode === "prod" ? "active" : ""} onClick={() => setMode("prod")}>
+          <button
+            className={mode === "prod" ? "active" : ""}
+            onClick={() => setMode("prod")}
+            style={{ display: canViewProd ? undefined : "none" }}
+          >
             本番
           </button>
         </div>

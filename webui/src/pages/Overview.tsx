@@ -1,6 +1,6 @@
 import { getJSON, formatDateTime, formatYen } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
-import type { BetStats, Overview } from "../types";
+import type { AuthStatus, BetStats, Overview } from "../types";
 
 function RecoveryCard({ mode, stats }: { mode: string; stats: BetStats }) {
   return (
@@ -44,8 +44,12 @@ function RecoveryCard({ mode, stats }: { mode: string; stats: BetStats }) {
   );
 }
 
-export default function OverviewPage() {
-  const { data, error } = usePolling<Overview>(() => getJSON("/api/overview"), 15000);
+export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
+  const { data, error } = usePolling<Overview>(
+    () => getJSON("/api/overview"),
+    15000,
+    [auth?.authenticated]
+  );
 
   if (error) return <ErrorNote message={error} />;
   if (!data) return <div className="loading">読み込み中...</div>;
@@ -106,8 +110,8 @@ export default function OverviewPage() {
             </div>
           </div>
         </div>
-        <RecoveryCard mode="sim" stats={data.modes.sim} />
-        <RecoveryCard mode="prod" stats={data.modes.prod} />
+        {data.modes.sim && <RecoveryCard mode="sim" stats={data.modes.sim} />}
+        {auth?.authenticated && data.modes.prod && <RecoveryCard mode="prod" stats={data.modes.prod} />}
       </div>
 
       <h2>ジョブの最終実行</h2>
