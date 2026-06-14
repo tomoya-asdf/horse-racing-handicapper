@@ -34,10 +34,24 @@ export interface JobRun {
   finished_at: string | null;
 }
 
+export interface JobReservation {
+  id: number;
+  job_name: string;
+  label: string;
+  run_at: string | null;
+  params: string | null;
+  status: "pending" | "queued" | "cancelled" | string;
+  queued_run_id: number | null;
+  created_at: string | null;
+  queued_at: string | null;
+  cancelled_at: string | null;
+}
+
 export interface JobsResponse {
   jobs: JobRun[];
   latest_jobs: JobRun[];
   scheduled_jobs: ScheduledJobSetting[];
+  reservations: JobReservation[];
 }
 
 export interface AuthStatus {

@@ -443,15 +443,15 @@ def _scheduled_train() -> None:
 
 
 def _poll_queued_jobs() -> None:
-    jobs.process_queued(
-        {
-            jobs.PREDICT: _run_predict,
-            jobs.BET_DECIDE: _run_bet_decide,
-            jobs.SETTLE: _run_settle,
-            jobs.TRAIN: _run_train,
-            jobs.BACKTEST: _run_backtest,
-        }
-    )
+    handlers = {
+        jobs.PREDICT: _run_predict,
+        jobs.BET_DECIDE: _run_bet_decide,
+        jobs.SETTLE: _run_settle,
+        jobs.TRAIN: _run_train,
+        jobs.BACKTEST: _run_backtest,
+    }
+    jobs.enqueue_due_reservations(list(handlers))
+    jobs.process_queued(handlers)
 
 
 def main() -> None:

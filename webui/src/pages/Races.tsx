@@ -207,7 +207,7 @@ function RaceDetailView({ raceId }: { raceId: number }) {
           </div>
         </div>
       )}
-      <details className="collapsible-panel bet-candidates">
+      <div className="bet-candidates">
         <summary>買い目候補</summary>
         <div className="bet-candidates-header">
           <div>
@@ -252,7 +252,7 @@ function RaceDetailView({ raceId }: { raceId: number }) {
             </table>
           </>
         )}
-      </details>
+      </div>
       <table className="table">
           <thead>
             <tr>
@@ -427,6 +427,7 @@ export default function RacesPage() {
     status: "",
     horse_name: "",
     jockey: "",
+    trainer: "",
     prediction: "",
     bet: "",
   });
@@ -474,6 +475,7 @@ export default function RacesPage() {
       status: "",
       horse_name: "",
       jockey: "",
+      trainer: "",
       prediction: "",
       bet: "",
     });
@@ -593,6 +595,14 @@ export default function RacesPage() {
               <option value="yes">買いあり</option>
               <option value="no">買いなし</option>
             </select>
+          </label>
+          <label className="trainer-filter">
+            <span>厩舎</span>
+            <input
+              value={filters.trainer}
+              onChange={(e) => updateFilter("trainer", e.target.value)}
+              placeholder="厩舎名で絞り込み"
+            />
           </label>
           <button className="secondary" onClick={clearFilters}>
             クリア

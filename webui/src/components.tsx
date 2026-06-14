@@ -7,6 +7,7 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "失敗",
   pending: "未確認",
   placed: "購入済み",
+  cancelled: "キャンセル",
   dry_run: "dry-run",
 };
 

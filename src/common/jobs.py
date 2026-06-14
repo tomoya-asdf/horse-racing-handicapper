@@ -17,7 +17,7 @@ from datetime import timedelta
 from typing import Callable
 
 from src.common.db import get_session
-from src.common.models import JobRun, JobStatus, JobTrigger
+from src.common.models import JobReservation, JobRun, JobStatus, JobTrigger
 from src.common.timeutils import now_jst
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,9 @@ POLL_INTERVAL_SECONDS = 5
 
 # これより古いrunning行は異常終了の残骸とみなし、新規実行をブロックしない
 STALE_RUNNING_MINUTES = 60
+RESERVATION_PENDING = "pending"
+RESERVATION_QUEUED = "queued"
+RESERVATION_CANCELLED = "cancelled"
 
 
 def scheduled_run_due(
@@ -121,6 +124,100 @@ def enqueue(job_name: str, params: dict | None = None) -> dict:
         return {"id": run.id, "status": run.status, "queued": True}
     finally:
         session.close()
+
+
+def reserve(job_name: str, run_at, params: dict | None = None) -> dict:
+    """指定日時に1回だけジョブを投入する予約を作成する。"""
+    session = get_session()
+    try:
+        reservation = JobReservation(
+            job_name=job_name,
+            run_at=run_at,
+            params=json.dumps(params, ensure_ascii=False) if params else None,
+            status=RESERVATION_PENDING,
+        )
+        session.add(reservation)
+        session.commit()
+        return _reservation_to_dict(reservation)
+    finally:
+        session.close()
+
+
+def list_reservations(limit: int = 100) -> list[dict]:
+    session = get_session()
+    try:
+        rows = (
+            session.query(JobReservation)
+            .order_by(JobReservation.run_at.desc(), JobReservation.id.desc())
+            .limit(min(max(limit, 1), 300))
+            .all()
+        )
+        return [_reservation_to_dict(row) for row in rows]
+    finally:
+        session.close()
+
+
+def cancel_reservation(reservation_id: int) -> bool:
+    session = get_session()
+    try:
+        reservation = session.get(JobReservation, reservation_id)
+        if reservation is None or reservation.status != RESERVATION_PENDING:
+            return False
+        reservation.status = RESERVATION_CANCELLED
+        reservation.cancelled_at = now_jst()
+        session.commit()
+        return True
+    finally:
+        session.close()
+
+
+def enqueue_due_reservations(job_names: list[str]) -> int:
+    """期限到来した予約を通常の queued job_runs に変換する。"""
+    now = now_jst()
+    session = get_session()
+    queued_count = 0
+    try:
+        blocked_names = {
+            row.job_name
+            for row in session.query(JobRun.job_name)
+            .filter(
+                JobRun.job_name.in_(job_names),
+                JobRun.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                JobRun.created_at > now - timedelta(minutes=STALE_RUNNING_MINUTES),
+            )
+            .all()
+        }
+        reservations = (
+            session.query(JobReservation)
+            .filter(
+                JobReservation.status == RESERVATION_PENDING,
+                JobReservation.job_name.in_(job_names),
+                JobReservation.run_at <= now,
+            )
+            .order_by(JobReservation.run_at, JobReservation.id)
+            .all()
+        )
+        claimed_names: set[str] = set()
+        for reservation in reservations:
+            if reservation.job_name in blocked_names or reservation.job_name in claimed_names:
+                continue
+            run = JobRun(
+                job_name=reservation.job_name,
+                trigger=JobTrigger.RESERVED.value,
+                status=JobStatus.QUEUED.value,
+                params=reservation.params,
+            )
+            session.add(run)
+            session.flush()
+            reservation.status = RESERVATION_QUEUED
+            reservation.queued_run_id = run.id
+            reservation.queued_at = now
+            claimed_names.add(reservation.job_name)
+            queued_count += 1
+        session.commit()
+    finally:
+        session.close()
+    return queued_count
 
 
 def stop_queued(run_id: int) -> bool:
@@ -215,6 +312,22 @@ def _parse_params(raw: str | None) -> dict:
         return parsed if isinstance(parsed, dict) else {}
     except ValueError:
         return {}
+
+
+def _reservation_to_dict(reservation: JobReservation) -> dict:
+    return {
+        "id": reservation.id,
+        "job_name": reservation.job_name,
+        "run_at": reservation.run_at.isoformat() if reservation.run_at else None,
+        "params": reservation.params,
+        "status": reservation.status,
+        "queued_run_id": reservation.queued_run_id,
+        "created_at": reservation.created_at.isoformat() if reservation.created_at else None,
+        "queued_at": reservation.queued_at.isoformat() if reservation.queued_at else None,
+        "cancelled_at": (
+            reservation.cancelled_at.isoformat() if reservation.cancelled_at else None
+        ),
+    }
 
 
 def _create_running(job_name: str, trigger: str) -> int:

@@ -528,15 +528,15 @@ def _scheduled_collect_trainers() -> None:
 
 
 def _poll_queued_jobs() -> None:
-    jobs.process_queued(
-        {
-            jobs.COLLECT: _run_collect,
-            jobs.BACKFILL: _run_backfill,
-            jobs.COLLECT_HORSES: _run_collect_horses,
-            jobs.COLLECT_JOCKEYS: _run_collect_jockeys,
-            jobs.COLLECT_TRAINERS: _run_collect_trainers,
-        }
-    )
+    handlers = {
+        jobs.COLLECT: _run_collect,
+        jobs.BACKFILL: _run_backfill,
+        jobs.COLLECT_HORSES: _run_collect_horses,
+        jobs.COLLECT_JOCKEYS: _run_collect_jockeys,
+        jobs.COLLECT_TRAINERS: _run_collect_trainers,
+    }
+    jobs.enqueue_due_reservations(list(handlers))
+    jobs.process_queued(handlers)
 
 
 def main() -> None:

@@ -15,7 +15,7 @@ collector
   v
 PostgreSQL
   ^
-  | predictions, bets, job_runs, app_settings
+  | predictions, bets, job_runs, job_reservations, app_settings
   |
 predictor  <---- model.pkl
   ^
@@ -38,6 +38,8 @@ PostgreSQL です。各サービスは同じ DB を参照します。
 
 - `collect`: 直近レースの収集、終了レースの結果更新、馬過去戦績の一部更新
 - `collect_horses`: 馬の過去戦績と血統をまとめて更新
+- `collect_jockeys`: 騎手の過去戦績をまとめて更新
+- `collect_trainers`: 調教師の過去戦績をまとめて更新
 - `backfill`: 指定期間の過去レース、結果、出走馬の過去戦績、血統を補完
 
 ### predictor
@@ -61,13 +63,13 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 主な画面:
 
 - 概要
-- レース一覧 / 詳細
+- レース一覧 / 詳細(日付、競馬場、状態、馬名、騎手、厩舎などで検索・絞り込み)
 - 馬詳細
 - 買い目一覧
 - ジョブ
 - 設定
 
-ジョブページは手動実行、バックフィル、バックテスト、実行履歴を扱います。定期実行設定は設定ページで扱います。
+ジョブページは手動実行、バックフィル、バックテスト、ジョブ予約、予約一覧、実行履歴を扱います。定期実行設定は設定ページで扱います。
 
 ## データモデル
 
@@ -151,9 +153,13 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 | `odds` | 判定時オッズ |
 | `fetched_at` | 取得時刻 |
 
-### job_runs / app_settings
+### job_runs / job_reservations / app_settings
 
-`job_runs` は手動実行とスケジュール実行の履歴を保存します。`app_settings` は Web UI から変更できる設定を保存します。
+`job_runs` は手動実行、スケジュール実行、予約から投入された実行の履歴を保存します。
+
+`job_reservations` は、指定日時に1回だけジョブを投入する予約を保存します。主なカラムは `job_name`, `run_at`, `params`, `status`, `queued_run_id`, `created_at`, `queued_at`, `cancelled_at` です。`status` は `pending`, `queued`, `cancelled` を使います。
+
+`app_settings` は Web UI から変更できる設定を保存します。
 
 ## 設定モデル
 
@@ -179,6 +185,8 @@ Web UI で変更できる主な設定:
 
 手動ジョブは Web UI から `job_runs` に登録され、collector / predictor が短い間隔でポーリングして実行します。
 
+ジョブ予約は Web UI から `job_reservations` に登録されます。collector / predictor は自分が担当するジョブの予約をポーリングし、`run_at` を過ぎた `pending` 予約を `trigger=reserved` の `job_runs` に変換します。同じジョブがキュー済みまたは実行中の場合、その予約は次回ポーリングまで `pending` のまま残します。予約は `pending` の間だけキャンセルできます。
+
 ### 定期実行
 
 定期実行対象:
@@ -187,6 +195,8 @@ Web UI で変更できる主な設定:
 | --- | --- |
 | `collect` | 前回実行から設定分数経過 |
 | `collect_horses` | 前回実行から設定分数経過 |
+| `collect_jockeys` | 前回実行から設定分数経過 |
+| `collect_trainers` | 前回実行から設定分数経過 |
 | `predict` | 前回実行から設定分数経過 |
 | `train` | 前回実行から設定分数経過 |
 | `bet_decide` | 次の対象レースの発走時刻から N 分前 |
@@ -311,7 +321,7 @@ Web UI で変更できる主な設定:
 - 上位候補ペアがともに 3 着内に入る確率を Harville 近似で作ります。
 - ワイドオッズとの期待値が `BET_MIN_EXPECTED_VALUE` 以上である必要があります。
 
-期待値を満たす候補は期待値順に並べ、1 レース最大 3 点まで 100 円単位で配分します。レース詳細画面では、出走馬情報を主表示し、買い目候補とオッズ取得状況は開閉式の補助情報として確認できます。
+期待値を満たす候補は期待値順に並べ、1 レース最大 3 点まで 100 円単位で配分します。レース詳細画面では、出走馬順位表の下、購入済み買い目表示の上に、買い目候補とオッズ取得状況を常時表示します。
 
 同じレース、同じモードの買い目は重複して作成しません。
 
@@ -325,6 +335,8 @@ Web UI で変更できる主な設定:
 - `GET /api/bets`
 - `GET /api/jobs`
 - `POST /api/jobs/{job_name}/run`
+- `POST /api/job-reservations`
+- `POST /api/job-reservations/{reservation_id}/cancel`
 - `PUT /api/jobs/schedule`
 - `GET /api/settings`
 - `PUT /api/settings`

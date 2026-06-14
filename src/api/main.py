@@ -44,7 +44,7 @@ from src.common.models import (
     TrainerResult,
 )
 from src.common.paths import MODEL_PATH
-from src.common.timeutils import now_jst
+from src.common.timeutils import JST, now_jst
 from src.predictor import betting
 
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +133,13 @@ def _job_to_dict(run: JobRun) -> dict:
         "created_at": _iso(run.created_at),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
+    }
+
+
+def _reservation_to_dict(reservation: dict) -> dict:
+    return {
+        **reservation,
+        "label": JOB_LABELS.get(reservation["job_name"], reservation["job_name"]),
     }
 
 
@@ -365,6 +372,7 @@ def list_races(
     status: str | None = None,
     horse_name: str | None = None,
     jockey: str | None = None,
+    trainer: str | None = None,
     prediction: str | None = None,
     bet: str | None = None,
 ) -> dict:
@@ -410,6 +418,8 @@ def list_races(
             query = query.filter(Race.entries.any(Entry.horse_name.ilike(f"%{horse_name.strip()}%")))
         if jockey:
             query = query.filter(Race.entries.any(Entry.jockey.ilike(f"%{jockey.strip()}%")))
+        if trainer:
+            query = query.filter(Race.entries.any(Entry.trainer.ilike(f"%{trainer.strip()}%")))
         if prediction == "yes":
             query = query.filter(Race.predictions.any())
         elif prediction == "no":
@@ -996,6 +1006,9 @@ def list_jobs(limit: int = 50) -> dict:
             "jobs": [_job_to_dict(run) for run in runs],
             "latest_jobs": latest_jobs,
             "scheduled_jobs": scheduled_jobs_view(),
+            "reservations": [
+                _reservation_to_dict(row) for row in jobs.list_reservations(limit=100)
+            ],
         }
     finally:
         session.close()
@@ -1046,6 +1059,48 @@ def _validate_backtest_params(body: dict) -> dict:
     if start > now_jst().date():
         raise HTTPException(status_code=400, detail="開始日は未来日を指定できません")
     return {"start_date": start.isoformat(), "end_date": end.isoformat()}
+
+
+def _parse_reservation_run_at(value: object) -> datetime:
+    raw = str(value or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="実行日時を指定してください")
+    try:
+        run_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="実行日時の形式が不正です")
+    if run_at.tzinfo is not None:
+        run_at = run_at.astimezone(JST).replace(tzinfo=None)
+    if run_at <= now_jst():
+        raise HTTPException(status_code=400, detail="実行日時は未来の日時を指定してください")
+    return run_at
+
+
+def _validate_reservation_params(job_name: str, body: dict) -> dict | None:
+    params = body.get("params")
+    if job_name == jobs.BACKFILL:
+        return _validate_backfill_params(params if isinstance(params, dict) else {})
+    if job_name == jobs.BACKTEST:
+        return _validate_backtest_params(params if isinstance(params, dict) else {})
+    return params if isinstance(params, dict) and params else None
+
+
+@app.post("/api/job-reservations", dependencies=[Depends(require_admin)])
+def create_job_reservation(body: dict) -> dict:
+    job_name = str(body.get("job_name", "")).strip()
+    if job_name not in jobs.ALL_JOBS:
+        raise HTTPException(status_code=400, detail=f"未対応のジョブです: {job_name}")
+    run_at = _parse_reservation_run_at(body.get("run_at"))
+    params = _validate_reservation_params(job_name, body)
+    reservation = jobs.reserve(job_name, run_at, params)
+    return _reservation_to_dict(reservation)
+
+
+@app.post("/api/job-reservations/{reservation_id}/cancel", dependencies=[Depends(require_admin)])
+def cancel_job_reservation(reservation_id: int) -> dict:
+    if not jobs.cancel_reservation(reservation_id):
+        raise HTTPException(status_code=409, detail="キャンセルできる予約が見つかりません")
+    return {"cancelled": True, "id": reservation_id}
 
 
 @app.post("/api/jobs/{job_name}/run", dependencies=[Depends(require_admin)])

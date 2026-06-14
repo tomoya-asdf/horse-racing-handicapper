@@ -3,12 +3,12 @@ import { formatDateTime, getJSON, postJSON } from "../api";
 import { ErrorNote, StatusBadge, usePolling } from "../components";
 import type { JobsResponse } from "../types";
 
-const JOB_BUTTONS = [
+const JOB_OPTIONS = [
   { name: "collect", label: "データ収集", description: "レース、出馬表、オッズ、結果を取得" },
   {
     name: "collect_horses",
     label: "馬過去戦績収集",
-    description: "出走馬の過去戦績と血統を補完",
+    description: "出走馬の過去戦績と統計を補完",
   },
   {
     name: "collect_jockeys",
@@ -28,12 +28,66 @@ const JOB_BUTTONS = [
   },
   { name: "settle", label: "決済", description: "確定済みレースの払戻を反映" },
   { name: "train", label: "モデル学習", description: "蓄積データからモデルを再学習" },
+  {
+    name: "backfill",
+    label: "過去データ取得",
+    description: "指定期間の過去レースをまとめて取得",
+  },
+  {
+    name: "backtest",
+    label: "回収率バックテスト",
+    description: "指定期間で予想、賭け、決済をシミュレート",
+  },
 ];
+
+const JOB_BUTTONS = JOB_OPTIONS.filter((job) => job.name !== "backfill" && job.name !== "backtest");
+const RANGE_JOB_NAMES = new Set(["backfill", "backtest"]);
+const RESERVATION_PAGE_SIZE = 5;
+const HISTORY_PAGE_SIZE = 15;
 
 function isoDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
+}
+
+function localDateTimeIn(minutes: number): string {
+  const d = new Date(Date.now() + minutes * 60 * 1000);
+  d.setSeconds(0, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+function triggerLabel(trigger: string): string {
+  if (trigger === "manual") return "手動";
+  if (trigger === "reserved") return "予約";
+  return "スケジュール";
+}
+
+function reservationStatusLabel(status: string): string {
+  if (status === "pending") return "予約中";
+  if (status === "queued") return "投入済み";
+  if (status === "cancelled") return "キャンセル";
+  return status;
+}
+
+function formatParams(raw: string | null): string {
+  if (!raw) return "-";
+  try {
+    const params = JSON.parse(raw);
+    if (params && typeof params === "object") {
+      const start = "start_date" in params ? String(params.start_date) : null;
+      const end = "end_date" in params ? String(params.end_date) : null;
+      if (start && end) return `${start} - ${end}`;
+    }
+  } catch {
+    /* raw text fallback */
+  }
+  return raw;
 }
 
 export default function JobsPage() {
@@ -45,6 +99,27 @@ export default function JobsPage() {
   const [backfillEnd, setBackfillEnd] = useState(isoDaysAgo(1));
   const [backtestStart, setBacktestStart] = useState(isoDaysAgo(365));
   const [backtestEnd, setBacktestEnd] = useState(isoDaysAgo(1));
+  const [reservationJob, setReservationJob] = useState("collect");
+  const [reservationRunAt, setReservationRunAt] = useState(localDateTimeIn(10));
+  const [reservationStart, setReservationStart] = useState(isoDaysAgo(14));
+  const [reservationEnd, setReservationEnd] = useState(isoDaysAgo(1));
+  const [reservationPage, setReservationPage] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+
+  const selectedReservationJob = JOB_OPTIONS.find((job) => job.name === reservationJob);
+  const reservationNeedsRange = RANGE_JOB_NAMES.has(reservationJob);
+  const reservations = data?.reservations ?? [];
+  const historyJobs = data?.jobs ?? [];
+  const reservationPageCount = Math.max(1, Math.ceil(reservations.length / RESERVATION_PAGE_SIZE));
+  const historyPageCount = Math.max(1, Math.ceil(historyJobs.length / HISTORY_PAGE_SIZE));
+  const visibleReservations = reservations.slice(
+    reservationPage * RESERVATION_PAGE_SIZE,
+    (reservationPage + 1) * RESERVATION_PAGE_SIZE
+  );
+  const visibleHistoryJobs = historyJobs.slice(
+    historyPage * HISTORY_PAGE_SIZE,
+    (historyPage + 1) * HISTORY_PAGE_SIZE
+  );
 
   const runJob = async (name: string, label: string, body?: unknown) => {
     setMessage(null);
@@ -67,6 +142,37 @@ export default function JobsPage() {
     void runJob(name, label, body);
   };
 
+  const reserveJob = async () => {
+    setMessage(null);
+    setActionError(null);
+    const params = reservationNeedsRange
+      ? { start_date: reservationStart, end_date: reservationEnd }
+      : undefined;
+    try {
+      await postJSON("/api/job-reservations", {
+        job_name: reservationJob,
+        run_at: reservationRunAt,
+        params,
+      });
+      setReservationPage(0);
+      setMessage(`「${selectedReservationJob?.label ?? reservationJob}」を予約しました。`);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const cancelReservation = async (id: number) => {
+    setMessage(null);
+    setActionError(null);
+    try {
+      await postJSON(`/api/job-reservations/${id}/cancel`);
+      setReservationPage(0);
+      setMessage("ジョブ予約をキャンセルしました。");
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const stopJob = async (id: number) => {
     setMessage(null);
     setActionError(null);
@@ -82,7 +188,7 @@ export default function JobsPage() {
     setMessage(null);
     setActionError(null);
     const ok = window.confirm(
-      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない構成では、手動コマンドが表示されます。"
+      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない環境では、手動コマンドが表示されます。"
     );
     if (!ok) return;
     try {
@@ -115,7 +221,7 @@ export default function JobsPage() {
       <h2>過去データ取得(バックフィル)</h2>
       <p className="muted">
         初回セットアップ時など、過去の開催日のレース、最終オッズ、確定結果をまとめて取得します。
-        モデル学習には確定済みレースが50件以上必要です。
+        モデル学習には確定済みレースが一定件数必要です。
       </p>
       <div className="backfill-form">
         <label>
@@ -173,8 +279,113 @@ export default function JobsPage() {
         </button>
       </div>
 
+      <h2>ジョブ予約</h2>
+      <p className="muted">
+        実行日時を指定して、1回だけジョブを自動投入します。過去データ取得と回収率バックテストは期間指定が必要です。
+      </p>
+      <div className="backfill-form reservation-form">
+        <label>
+          <span>実行日時</span>
+          <input
+            type="datetime-local"
+            value={reservationRunAt}
+            onChange={(e) => setReservationRunAt(e.target.value)}
+          />
+        </label>
+        <label>
+          <span>ジョブ</span>
+          <select value={reservationJob} onChange={(e) => setReservationJob(e.target.value)}>
+            {JOB_OPTIONS.map((job) => (
+              <option key={job.name} value={job.name}>
+                {job.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {reservationNeedsRange && (
+          <>
+            <label>
+              <span>開始日</span>
+              <input
+                type="date"
+                value={reservationStart}
+                onChange={(e) => setReservationStart(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>終了日</span>
+              <input
+                type="date"
+                value={reservationEnd}
+                onChange={(e) => setReservationEnd(e.target.value)}
+              />
+            </label>
+          </>
+        )}
+        <button className="primary" onClick={() => void reserveJob()}>
+          予約する
+        </button>
+      </div>
+
       {message && <div className="info-note">{message}</div>}
       <ErrorNote message={actionError} />
+
+      <h2>予約一覧</h2>
+      <table className="table latest-jobs-table">
+        <thead>
+          <tr>
+            <th>実行予定</th>
+            <th>ジョブ</th>
+            <th>状態</th>
+            <th>パラメータ</th>
+            <th>登録</th>
+            <th>投入ID</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(data?.reservations ?? []).length === 0 && (
+            <tr>
+              <td colSpan={7} className="muted">
+                予約はありません
+              </td>
+            </tr>
+          )}
+          {visibleReservations.map((reservation) => (
+            <tr key={reservation.id}>
+              <td>{formatDateTime(reservation.run_at)}</td>
+              <td>{reservation.label}</td>
+              <td>
+                <span className={`badge badge-${reservation.status}`}>
+                  {reservationStatusLabel(reservation.status)}
+                </span>
+              </td>
+              <td className="detail-cell">{formatParams(reservation.params)}</td>
+              <td>{formatDateTime(reservation.created_at)}</td>
+              <td>{reservation.queued_run_id ?? "-"}</td>
+              <td>
+                {reservation.status === "pending" ? (
+                  <button
+                    className="secondary danger-outline"
+                    onClick={() => void cancelReservation(reservation.id)}
+                  >
+                    キャンセル
+                  </button>
+                ) : (
+                  "-"
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <TablePager
+        page={reservationPage}
+        pageCount={reservationPageCount}
+        pageSize={RESERVATION_PAGE_SIZE}
+        total={reservations.length}
+        onPageChange={setReservationPage}
+      />
 
       <h2>ジョブの最終実行</h2>
       <table className="table latest-jobs-table">
@@ -201,7 +412,7 @@ export default function JobsPage() {
               <td>
                 <StatusBadge status={job.status} />
               </td>
-              <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
+              <td>{triggerLabel(job.trigger)}</td>
               <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
               <td className="detail-cell">{job.detail ?? "-"}</td>
             </tr>
@@ -224,7 +435,7 @@ export default function JobsPage() {
           </tr>
         </thead>
         <tbody>
-          {(data?.jobs ?? []).map((job) => (
+          {visibleHistoryJobs.map((job) => (
             <Fragment key={job.id}>
               <tr
                 className="row-clickable"
@@ -234,7 +445,7 @@ export default function JobsPage() {
                 <td>
                   <StatusBadge status={job.status} />
                 </td>
-                <td>{job.trigger === "manual" ? "手動" : "スケジュール"}</td>
+                <td>{triggerLabel(job.trigger)}</td>
                 <td>{formatDateTime(job.created_at)}</td>
                 <td>{formatDateTime(job.started_at)}</td>
                 <td>{formatDateTime(job.finished_at)}</td>
@@ -281,18 +492,64 @@ export default function JobsPage() {
           ))}
         </tbody>
       </table>
+      <TablePager
+        page={historyPage}
+        pageCount={historyPageCount}
+        pageSize={HISTORY_PAGE_SIZE}
+        total={historyJobs.length}
+        onPageChange={(nextPage) => {
+          setOpenJobId(null);
+          setHistoryPage(nextPage);
+        }}
+      />
 
       <section className="danger-zone">
         <div>
           <h2>管理操作</h2>
           <p className="muted">
-            システム全体の再起動は通常のジョブ実行と別操作です。必要な時だけ実行してください。
+            システム全体の再起動は通常のジョブ実行とは別操作です。必要な時だけ実行してください。
           </p>
         </div>
         <button className="secondary danger-outline" onClick={() => void restartSystem()}>
           システム全体を再起動
         </button>
       </section>
+    </div>
+  );
+}
+
+function TablePager({
+  page,
+  pageCount,
+  pageSize,
+  total,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (total <= pageSize) return null;
+  return (
+    <div className="pagination-bar table-pagination">
+      <span className="muted">
+        {total.toLocaleString()}件中{" "}
+        {(page * pageSize + 1).toLocaleString()}-
+        {Math.min((page + 1) * pageSize, total).toLocaleString()}件を表示
+      </span>
+      <div className="pagination-actions">
+        <button disabled={page === 0} onClick={() => onPageChange(page - 1)}>
+          前のページ
+        </button>
+        <span>
+          {page + 1} / {pageCount}ページ
+        </span>
+        <button disabled={page + 1 >= pageCount} onClick={() => onPageChange(page + 1)}>
+          次のページ
+        </button>
+      </div>
     </div>
   );
 }

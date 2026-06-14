@@ -465,9 +465,10 @@ h2 {
   color: var(--yellow);
 }
 
-.badge-dry_run {
+.badge-dry_run,
+.badge-cancelled {
   background: rgba(139, 152, 169, 0.16);
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .badge-placed {
@@ -614,7 +615,7 @@ h2 {
 /* バックフィルフォーム */
 .backfill-form {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 14px;
   flex-wrap: wrap;
   background: var(--bg-card);
@@ -634,7 +635,8 @@ h2 {
   font-size: 13px;
 }
 
-.backfill-form input {
+.backfill-form input,
+.backfill-form select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -642,6 +644,10 @@ h2 {
   padding: 7px 10px;
   font-size: 14px;
   color-scheme: dark;
+}
+
+.reservation-form {
+  margin-bottom: 12px;
 }
 
 /* 予測スコアバー */
@@ -670,8 +676,22 @@ h2 {
 
 /* レース詳細 */
 .race-detail {
+  display: flex;
+  flex-direction: column;
   padding: 8px 4px 14px;
   overflow-x: auto;
+}
+
+.race-detail > .table {
+  order: 10;
+}
+
+.race-detail > .bet-candidates {
+  order: 20;
+}
+
+.race-detail > .race-bets {
+  order: 30;
 }
 
 .race-detail .table {
@@ -684,6 +704,10 @@ h2 {
 
 .bet-candidates {
   margin: 10px 0 14px;
+}
+
+.bet-candidates > summary {
+  display: none;
 }
 
 .bet-candidates-header {
@@ -883,6 +907,10 @@ h2 {
   opacity: 0.45;
 }
 
+.table-pagination {
+  margin: 12px 0 20px;
+}
+
 .race-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -954,6 +982,10 @@ h2 {
 }
 
 .race-filters > button {
+  order: 11;
+}
+
+.race-filters > .trainer-filter {
   order: 10;
 }
 
@@ -992,6 +1024,7 @@ h2 {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  margin-bottom: 18px;
 }
 
 .mode-switch {
@@ -1309,6 +1342,7 @@ button.secondary:hover {
   }
 
   .backfill-form input,
+  .backfill-form select,
   .race-filters input,
   .race-filters select,
   .schedule-number-input {

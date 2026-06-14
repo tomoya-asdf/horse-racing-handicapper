@@ -237,6 +237,7 @@ class Prediction(Base):
 class JobTrigger(str, Enum):
     SCHEDULED = "scheduled"
     MANUAL = "manual"
+    RESERVED = "reserved"
 
 
 class JobStatus(str, Enum):
@@ -264,6 +265,22 @@ class JobRun(Base):
     created_at = Column(DateTime, default=now_jst)
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
+
+
+class JobReservation(Base):
+    """指定日時に1回だけジョブを投入する予約。"""
+
+    __tablename__ = "job_reservations"
+
+    id = Column(Integer, primary_key=True)
+    job_name = Column(String(20), nullable=False)
+    run_at = Column(DateTime, nullable=False)
+    params = Column(String)
+    status = Column(String(12), nullable=False, default="pending")
+    queued_run_id = Column(Integer, ForeignKey("job_runs.id"))
+    created_at = Column(DateTime, default=now_jst)
+    queued_at = Column(DateTime)
+    cancelled_at = Column(DateTime)
 
 
 class AppSetting(Base):

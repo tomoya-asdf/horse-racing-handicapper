@@ -127,10 +127,6 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
                 <span>{formatDateTime(data.model.trained_at)}</span>
               </div>
               <div>
-                <span>学習候補</span>
-                <span>{data.data.finished_race_count.toLocaleString()} レース</span>
-              </div>
-              <div>
                 <span>発走前予測済み</span>
                 <span>
                   {data.data.predicted_upcoming_race_count.toLocaleString()} /{" "}
