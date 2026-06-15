@@ -112,7 +112,7 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
         </div>
       )}
       <section className="overview-section">
-        <h2>レース / 予測モデル</h2>
+        <h2>予測モデル / レース</h2>
         <div className="card-grid">
           <div className="card">
             <div className="card-title">予測モデル</div>

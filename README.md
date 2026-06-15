@@ -1,6 +1,6 @@
 # horse-racing-handicapper
 
-JRA レースデータを収集し、AI 予想、買い目判定、結果反映を Web UI から操作するローカル運用向けアプリケーションです。
+競馬レースデータを収集し、AI 予想、買い目判定、結果反映を Web UI から操作するローカル運用向けアプリケーションです。
 
 ## 構成
 
@@ -23,24 +23,34 @@ docker/          各サービスの Dockerfile
 docs/            設計ドキュメント
 ```
 
-## 起動
+## セットアップ
 
-```powershell
-docker compose up -d --build
-```
+1. `.env.example` を `.env` にコピーする
 
-Web UI:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
 
-```text
-http://localhost:8000
-```
+1. .envを編集して、管理者パスワードを変更する
+   ```powershell
+   ADMIN_PASSWORD = {変更したいパスワード}
+   ```
+   ※その他、必要に応じて値を変更してください。
+   
+1. コンテナをビルド・起動する
 
-このプロジェクトは通常、ソースをコンテナへコピーしてイメージを作ります。コードや Web UI を変更した場合は、対象イメージを再ビルドしてコンテナを再作成してください。
+ 
+   ```powershell
+   docker compose up -d --build
+   ```
 
-```powershell
-docker compose build collector predictor webui
-docker compose up -d --force-recreate collector predictor webui
-```
+1. 管理コンソールへアクセスする
+
+   http://localhost:8000
+
+   ※ 管理コンソール(8000)とPostgreSQL(5432)はループバックアドレス(127.0.0.1)のみに
+   公開しています。他の端末からアクセスする必要がある場合のみ `docker-compose.yml` の
+   `ports` を変更してください（認証は無いため、公開範囲の変更は慎重に）。
 
 ## Web UI
 
