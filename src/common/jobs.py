@@ -13,7 +13,7 @@ queuedの行をclaimして実行する。スケジュール実行は ``run_sched
 import json
 import logging
 import traceback
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Callable
 
 from src.common.db import get_session
@@ -57,8 +57,18 @@ RESERVATION_QUEUED = "queued"
 RESERVATION_CANCELLED = "cancelled"
 
 
+def _today_exact_due_at(exact_time: str):
+    now = now_jst()
+    hour, minute = (int(part) for part in exact_time.split(":", 1))
+    return datetime.combine(now.date(), datetime.min.time()).replace(
+        hour=hour,
+        minute=minute,
+        tzinfo=now.tzinfo,
+    )
+
+
 def scheduled_run_due(
-    job_name: str, interval_minutes: int, due_at=None, weekdays=None
+    job_name: str, interval_minutes: int | None, due_at=None, weekdays=None, exact_time: str | None = None
 ) -> bool:
     """Return True when a scheduled job is enabled to start a new run now.
 
@@ -67,6 +77,11 @@ def scheduled_run_due(
     now = now_jst()
     if weekdays is not None and now.weekday() not in weekdays:
         return False
+    exact_due_at = None
+    if exact_time:
+        exact_due_at = _today_exact_due_at(exact_time)
+        if now < exact_due_at:
+            return False
     if due_at is not None and due_at > now:
         return False
 
@@ -92,6 +107,10 @@ def scheduled_run_due(
         )
         if latest is None or latest.started_at is None:
             return True
+        if exact_due_at is not None:
+            return latest.started_at < exact_due_at
+        if interval_minutes is None:
+            return False
         return latest.started_at <= now - timedelta(minutes=interval_minutes)
     finally:
         session.close()

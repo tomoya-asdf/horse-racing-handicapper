@@ -387,7 +387,10 @@ def _scheduled_predict() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.PREDICT, config.interval_minutes, weekdays=config.weekdays
+        jobs.PREDICT,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.PREDICT, _run_predict)
@@ -397,16 +400,22 @@ def _scheduled_bet_decide() -> None:
     config = load_scheduled_job_config(jobs.BET_DECIDE)
     if config is None or not config.enabled:
         return
-    before_start_minutes = (
-        config.before_start_minutes
-        if config.before_start_minutes is not None
-        else settings.BET_DECISION_LEAD_MINUTES
-    )
-    due_at = _next_bet_decide_due_at(before_start_minutes)
-    if due_at is None:
-        return
+    due_at = None
+    if not config.exact_time:
+        before_start_minutes = (
+            config.before_start_minutes
+            if config.before_start_minutes is not None
+            else settings.BET_DECISION_LEAD_MINUTES
+        )
+        due_at = _next_bet_decide_due_at(before_start_minutes)
+        if due_at is None:
+            return
     if not jobs.scheduled_run_due(
-        jobs.BET_DECIDE, config.interval_minutes, due_at=due_at, weekdays=config.weekdays
+        jobs.BET_DECIDE,
+        config.interval_minutes,
+        due_at=due_at,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.BET_DECIDE, _run_bet_decide)
@@ -416,16 +425,22 @@ def _scheduled_settle() -> None:
     config = load_scheduled_job_config(jobs.SETTLE)
     if config is None or not config.enabled:
         return
-    after_start_minutes = (
-        config.after_start_minutes
-        if config.after_start_minutes is not None
-        else settings.SETTLE_DELAY_MINUTES
-    )
-    due_at = _next_settle_due_at(after_start_minutes)
-    if due_at is None:
-        return
+    due_at = None
+    if not config.exact_time:
+        after_start_minutes = (
+            config.after_start_minutes
+            if config.after_start_minutes is not None
+            else settings.SETTLE_DELAY_MINUTES
+        )
+        due_at = _next_settle_due_at(after_start_minutes)
+        if due_at is None:
+            return
     if not jobs.scheduled_run_due(
-        jobs.SETTLE, config.interval_minutes, due_at=due_at, weekdays=config.weekdays
+        jobs.SETTLE,
+        config.interval_minutes,
+        due_at=due_at,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.SETTLE, _run_settle)
@@ -436,7 +451,10 @@ def _scheduled_train() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.TRAIN, config.interval_minutes, weekdays=config.weekdays
+        jobs.TRAIN,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.TRAIN, _run_train)

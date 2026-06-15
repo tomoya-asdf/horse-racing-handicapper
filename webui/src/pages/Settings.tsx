@@ -33,12 +33,13 @@ function scheduleToForm(jobs: ScheduledJobSetting[]): ScheduleForm {
   const form: ScheduleForm = {};
   for (const job of jobs) {
     form[job.enabled_key] = job.enabled;
-    if (job.interval_key) form[job.interval_key] = String(job.interval_minutes ?? 1);
+    if (job.time_key) form[job.time_key] = job.exact_time ?? "";
+    if (job.interval_key) form[job.interval_key] = job.interval_minutes == null ? "" : String(job.interval_minutes);
     if (job.before_start_key) {
-      form[job.before_start_key] = String(job.before_start_minutes ?? 1);
+      form[job.before_start_key] = job.before_start_minutes == null ? "" : String(job.before_start_minutes);
     }
     if (job.after_start_key) {
-      form[job.after_start_key] = String(job.after_start_minutes ?? 0);
+      form[job.after_start_key] = job.after_start_minutes == null ? "" : String(job.after_start_minutes);
     }
     form[job.days_key] = (job.days ?? []).join(",");
   }
@@ -79,6 +80,27 @@ export default function SettingsPage() {
     setScheduleForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const updateScheduleTime = (job: ScheduledJobSetting, value: string) => {
+    setScheduleForm((prev) => {
+      const next = { ...prev };
+      if (job.time_key) next[job.time_key] = value;
+      if (value) {
+        if (job.interval_key) next[job.interval_key] = "";
+        if (job.before_start_key) next[job.before_start_key] = "";
+        if (job.after_start_key) next[job.after_start_key] = "";
+      }
+      return next;
+    });
+  };
+
+  const updateScheduleRelative = (job: ScheduledJobSetting, key: string, value: string) => {
+    setScheduleForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (value && job.time_key) next[job.time_key] = "";
+      return next;
+    });
+  };
+
   const toggleDay = (key: string, day: number) => {
     const days = parseDays(scheduleForm[key]);
     if (days.has(day)) {
@@ -105,7 +127,7 @@ export default function SettingsPage() {
 
     setSaving(true);
     try {
-      const payload: Record<string, string | boolean | number> = {
+      const payload: Record<string, string | boolean | number | null> = {
         betting_mode: form.betting_mode,
         bet_amount: Number(form.bet_amount),
         bet_score_threshold: Number(form.bet_score_threshold),
@@ -114,12 +136,18 @@ export default function SettingsPage() {
 
       for (const job of view?.scheduled_jobs ?? []) {
         payload[job.enabled_key] = Boolean(scheduleForm[job.enabled_key]);
-        if (job.interval_key) payload[job.interval_key] = Number(scheduleForm[job.interval_key]);
+        if (job.time_key) payload[job.time_key] = String(scheduleForm[job.time_key] ?? "");
+        if (job.interval_key) {
+          const value = String(scheduleForm[job.interval_key] ?? "").trim();
+          payload[job.interval_key] = value ? Number(value) : null;
+        }
         if (job.before_start_key) {
-          payload[job.before_start_key] = Number(scheduleForm[job.before_start_key]);
+          const value = String(scheduleForm[job.before_start_key] ?? "").trim();
+          payload[job.before_start_key] = value ? Number(value) : null;
         }
         if (job.after_start_key) {
-          payload[job.after_start_key] = Number(scheduleForm[job.after_start_key]);
+          const value = String(scheduleForm[job.after_start_key] ?? "").trim();
+          payload[job.after_start_key] = value ? Number(value) : null;
         }
         payload[job.days_key] = String(scheduleForm[job.days_key] ?? "");
       }
@@ -213,6 +241,7 @@ export default function SettingsPage() {
           <tr>
             <th>ジョブ</th>
             <th>有効</th>
+            <th>指定時分</th>
             <th>確認間隔(分)</th>
             <th>発走前(分)</th>
             <th>発走後(分)</th>
@@ -222,7 +251,8 @@ export default function SettingsPage() {
           </tr>
         </thead>
         <tbody>
-          {(view?.scheduled_jobs ?? []).map((job) => (
+          {(view?.scheduled_jobs ?? []).map((job) => {
+            return (
             <tr key={job.job_name}>
               <td>{job.label}</td>
               <td>
@@ -236,14 +266,26 @@ export default function SettingsPage() {
                 </label>
               </td>
               <td>
+                {job.time_key ? (
+                  <input
+                    className="schedule-time-input"
+                    type="time"
+                    value={String(scheduleForm[job.time_key] ?? "")}
+                    onChange={(e) => updateScheduleTime(job, e.target.value)}
+                  />
+                ) : (
+                  "-"
+                )}
+              </td>
+              <td>
                 {job.interval_key ? (
                   <input
                     className="schedule-number-input"
                     type="number"
                     min={1}
                     step={1}
-                    value={String(scheduleForm[job.interval_key] ?? job.interval_minutes ?? 1)}
-                    onChange={(e) => updateScheduleField(job.interval_key!, e.target.value)}
+                    value={String(scheduleForm[job.interval_key] ?? "")}
+                    onChange={(e) => updateScheduleRelative(job, job.interval_key!, e.target.value)}
                   />
                 ) : (
                   "-"
@@ -256,10 +298,8 @@ export default function SettingsPage() {
                     type="number"
                     min={1}
                     step={1}
-                    value={String(
-                      scheduleForm[job.before_start_key] ?? job.before_start_minutes ?? 1
-                    )}
-                    onChange={(e) => updateScheduleField(job.before_start_key!, e.target.value)}
+                    value={String(scheduleForm[job.before_start_key] ?? "")}
+                    onChange={(e) => updateScheduleRelative(job, job.before_start_key!, e.target.value)}
                   />
                 ) : (
                   "-"
@@ -272,8 +312,8 @@ export default function SettingsPage() {
                     type="number"
                     min={0}
                     step={1}
-                    value={String(scheduleForm[job.after_start_key] ?? job.after_start_minutes ?? 0)}
-                    onChange={(e) => updateScheduleField(job.after_start_key!, e.target.value)}
+                    value={String(scheduleForm[job.after_start_key] ?? "")}
+                    onChange={(e) => updateScheduleRelative(job, job.after_start_key!, e.target.value)}
                   />
                 ) : (
                   "-"
@@ -300,7 +340,8 @@ export default function SettingsPage() {
               <td>{job.enabled ? formatDateTime(job.next_run_at) : "-"}</td>
               <td className="muted">{job.description}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 

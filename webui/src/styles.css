@@ -1237,6 +1237,21 @@ button.secondary:hover {
   padding: 7px 8px;
 }
 
+.schedule-time-input {
+  width: 112px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 8px;
+}
+
+.schedule-number-input:disabled,
+.schedule-time-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .schedule-timing-field {
   display: inline-flex;
   align-items: center;

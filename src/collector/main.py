@@ -488,7 +488,10 @@ def _scheduled_collect() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.COLLECT, config.interval_minutes, weekdays=config.weekdays
+        jobs.COLLECT,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.COLLECT, _run_collect)
@@ -499,7 +502,10 @@ def _scheduled_collect_horses() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.COLLECT_HORSES, config.interval_minutes, weekdays=config.weekdays
+        jobs.COLLECT_HORSES,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.COLLECT_HORSES, _run_collect_horses)
@@ -510,7 +516,10 @@ def _scheduled_collect_jockeys() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.COLLECT_JOCKEYS, config.interval_minutes, weekdays=config.weekdays
+        jobs.COLLECT_JOCKEYS,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.COLLECT_JOCKEYS, _run_collect_jockeys)
@@ -521,7 +530,10 @@ def _scheduled_collect_trainers() -> None:
     if config is None or not config.enabled:
         return
     if not jobs.scheduled_run_due(
-        jobs.COLLECT_TRAINERS, config.interval_minutes, weekdays=config.weekdays
+        jobs.COLLECT_TRAINERS,
+        config.interval_minutes,
+        weekdays=config.weekdays,
+        exact_time=config.exact_time,
     ):
         return
     jobs.run_scheduled(jobs.COLLECT_TRAINERS, _run_collect_trainers)

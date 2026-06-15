@@ -31,6 +31,7 @@ class ScheduledJobConfig:
     interval_minutes: int | None = None
     before_start_minutes: int | None = None
     after_start_minutes: int | None = None
+    exact_time: str | None = None
     weekdays: frozenset[int] = frozenset(range(7))
 
 
@@ -45,6 +46,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect",
         "enabled_key": "schedule_collect_enabled",
         "interval_key": "schedule_collect_interval_minutes",
+        "time_key": "schedule_collect_time",
         "days_key": "schedule_collect_days",
         "label": "データ収集",
         "description": "レース、出馬表、単勝オッズ、結果を更新します。",
@@ -54,6 +56,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect_horses",
         "enabled_key": "schedule_collect_horses_enabled",
         "interval_key": "schedule_collect_horses_interval_minutes",
+        "time_key": "schedule_collect_horses_time",
         "days_key": "schedule_collect_horses_days",
         "label": "馬過去戦績収集",
         "description": "出走馬の過去戦績と血統をまとめて補完します。",
@@ -63,6 +66,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect_jockeys",
         "enabled_key": "schedule_collect_jockeys_enabled",
         "interval_key": "schedule_collect_jockeys_interval_minutes",
+        "time_key": "schedule_collect_jockeys_time",
         "days_key": "schedule_collect_jockeys_days",
         "label": "騎手過去戦績収集",
         "description": "出走騎手の過去戦績をまとめて補完します。",
@@ -72,6 +76,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "collect_trainers",
         "enabled_key": "schedule_collect_trainers_enabled",
         "interval_key": "schedule_collect_trainers_interval_minutes",
+        "time_key": "schedule_collect_trainers_time",
         "days_key": "schedule_collect_trainers_days",
         "label": "調教師過去戦績収集",
         "description": "出走馬の調教師の過去戦績をまとめて補完します。",
@@ -81,6 +86,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "predict",
         "enabled_key": "schedule_predict_enabled",
         "interval_key": "schedule_predict_interval_minutes",
+        "time_key": "schedule_predict_time",
         "days_key": "schedule_predict_days",
         "label": "AI予想",
         "description": "未確定レースに予測スコアを保存します。",
@@ -90,6 +96,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "bet_decide",
         "enabled_key": "schedule_bet_decide_enabled",
         "before_key": "schedule_bet_decide_before_start_minutes",
+        "time_key": "schedule_bet_decide_time",
         "days_key": "schedule_bet_decide_days",
         "label": "賭け対象決定",
         "description": "次の発走時刻を基準に、指定分前に最新オッズで判定します。",
@@ -99,6 +106,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "settle",
         "enabled_key": "schedule_settle_enabled",
         "after_key": "schedule_settle_after_start_minutes",
+        "time_key": "schedule_settle_time",
         "days_key": "schedule_settle_days",
         "label": "決済",
         "description": "購入済みレースの発走時刻を基準に、指定分後から払戻を確認します。",
@@ -108,6 +116,7 @@ SCHEDULED_JOB_DEFS = (
         "job_name": "train",
         "enabled_key": "schedule_train_enabled",
         "interval_key": "schedule_train_interval_minutes",
+        "time_key": "schedule_train_time",
         "days_key": "schedule_train_days",
         "label": "モデル学習",
         "description": "確定済みレースから予測モデルを再学習します。",
@@ -126,6 +135,8 @@ def _schedule_defaults() -> dict[str, object]:
             defaults[str(item["before_key"])] = int(item["default_before"])
         if item.get("after_key"):
             defaults[str(item["after_key"])] = int(item["default_after"])
+        if item.get("time_key"):
+            defaults[str(item["time_key"])] = ""
         if item.get("days_key"):
             defaults[str(item["days_key"])] = ALL_WEEKDAYS
     return defaults
@@ -185,6 +196,21 @@ def _parse_weekdays(key: str, value: object) -> str:
     return ",".join(str(day) for day in sorted(days))
 
 
+def _parse_exact_time(key: str, value: object) -> str | None:
+    text = str(value or "").strip()
+    if text == "":
+        return None
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} は HH:MM 形式で指定してください: {value!r}")
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"{key} は HH:MM 形式で指定してください: {value!r}")
+    return f"{hour:02d}:{minute:02d}"
+
+
 def _weekdays_from_str(value: object) -> frozenset[int]:
     return frozenset(
         int(part) for part in str(value).split(",") if part.strip() != ""
@@ -203,11 +229,16 @@ def _parse(key: str, value: object):
     if key.startswith("schedule_") and key.endswith("_days"):
         return _parse_weekdays(key, value)
 
+    if key.startswith("schedule_") and key.endswith("_time"):
+        return _parse_exact_time(key, value)
+
     if key.startswith("schedule_") and (
         key.endswith("_interval_minutes")
         or key.endswith("_before_start_minutes")
         or key.endswith("_after_start_minutes")
     ):
+        if str(value or "").strip() == "":
+            return None
         number = int(_parse_number(key, value))
         minimum = 1 if key.endswith("_interval_minutes") or key.endswith("_before_start_minutes") else 0
         if number < minimum:
@@ -271,18 +302,34 @@ def load_scheduled_job_config(job_name: str) -> ScheduledJobConfig | None:
     if item is None:
         return None
     merged = _merged_settings()
+    exact_time = _parse_exact_time(str(item["time_key"]), merged.get(item["time_key"]))
     return ScheduledJobConfig(
         job_name=job_name,
         enabled=bool(merged[item["enabled_key"]]),
         interval_minutes=(
-            int(merged[item["interval_key"]]) if item.get("interval_key") else EVENT_CHECK_INTERVAL_MINUTES
+            None
+            if exact_time
+            else int(merged[item["interval_key"]])
+            if item.get("interval_key") and merged.get(item["interval_key"]) is not None
+            else EVENT_CHECK_INTERVAL_MINUTES
+            if not item.get("interval_key") and not exact_time
+            else None
         ),
         before_start_minutes=(
-            int(merged[item["before_key"]]) if item.get("before_key") else None
+            None
+            if exact_time
+            else int(merged[item["before_key"]])
+            if item.get("before_key") and merged.get(item["before_key"]) is not None
+            else None
         ),
         after_start_minutes=(
-            int(merged[item["after_key"]]) if item.get("after_key") else None
+            None
+            if exact_time
+            else int(merged[item["after_key"]])
+            if item.get("after_key") and merged.get(item["after_key"]) is not None
+            else None
         ),
+        exact_time=exact_time,
         weekdays=_weekdays_from_str(merged[item["days_key"]]),
     )
 
@@ -348,6 +395,25 @@ def _restrict_to_weekdays(dt: datetime | None, weekdays: frozenset[int]) -> date
     return None
 
 
+def _next_exact_time_run_at(exact_time: str | None, weekdays: frozenset[int]) -> datetime | None:
+    if not exact_time or not weekdays:
+        return None
+    hour, minute = (int(part) for part in exact_time.split(":", 1))
+    now = now_jst()
+    for offset in range(0, 8):
+        candidate_date = (now + timedelta(days=offset)).date()
+        if candidate_date.weekday() not in weekdays:
+            continue
+        candidate = datetime.combine(candidate_date, datetime.min.time()).replace(
+            hour=hour,
+            minute=minute,
+            tzinfo=now.tzinfo,
+        )
+        if candidate >= now:
+            return candidate
+    return None
+
+
 def scheduled_jobs_view() -> list[dict]:
     merged = _merged_settings()
     session = get_session()
@@ -357,17 +423,29 @@ def scheduled_jobs_view() -> list[dict]:
             job_name = str(item["job_name"])
             enabled = bool(merged[item["enabled_key"]])
             interval = (
-                int(merged[item["interval_key"]]) if item.get("interval_key") else None
+                int(merged[item["interval_key"]])
+                if item.get("interval_key") and merged.get(item["interval_key"]) is not None
+                else None
             )
             before_start = (
-                int(merged[item["before_key"]]) if item.get("before_key") else None
+                int(merged[item["before_key"]])
+                if item.get("before_key") and merged.get(item["before_key"]) is not None
+                else None
             )
             after_start = (
-                int(merged[item["after_key"]]) if item.get("after_key") else None
+                int(merged[item["after_key"]])
+                if item.get("after_key") and merged.get(item["after_key"]) is not None
+                else None
             )
+            exact_time = _parse_exact_time(str(item["time_key"]), merged.get(item["time_key"]))
             weekdays = _weekdays_from_str(merged[item["days_key"]])
 
-            if interval is not None:
+            if exact_time:
+                interval = None
+                before_start = None
+                after_start = None
+                next_run_at = _next_exact_time_run_at(exact_time, weekdays)
+            elif interval is not None:
                 next_run_at = _next_interval_run_at(session, job_name, interval)
             elif before_start is not None:
                 next_run_at = _next_bet_decide_run_at(session, before_start)
@@ -376,7 +454,8 @@ def scheduled_jobs_view() -> list[dict]:
             else:
                 next_run_at = None
 
-            next_run_at = _restrict_to_weekdays(next_run_at, weekdays)
+            if not exact_time:
+                next_run_at = _restrict_to_weekdays(next_run_at, weekdays)
 
             items.append(
                 {
@@ -385,6 +464,7 @@ def scheduled_jobs_view() -> list[dict]:
                     "interval_key": item.get("interval_key"),
                     "before_start_key": item.get("before_key"),
                     "after_start_key": item.get("after_key"),
+                    "time_key": item.get("time_key"),
                     "days_key": item["days_key"],
                     "label": item["label"],
                     "description": item["description"],
@@ -392,6 +472,7 @@ def scheduled_jobs_view() -> list[dict]:
                     "interval_minutes": interval,
                     "before_start_minutes": before_start,
                     "after_start_minutes": after_start,
+                    "exact_time": exact_time,
                     "days": sorted(weekdays),
                     "next_run_at": (
                         next_run_at.isoformat() if enabled and next_run_at is not None else None
@@ -547,12 +628,13 @@ def save_settings(values: dict[str, object]) -> dict:
     session = get_session()
     try:
         for key, value in validated.items():
+            stored_value = "" if value is None else str(value)
             row = session.get(AppSetting, key)
             if row is None:
-                row = AppSetting(key=key, value=str(value))
+                row = AppSetting(key=key, value=stored_value)
                 session.add(row)
             else:
-                row.value = str(value)
+                row.value = stored_value
         session.commit()
     finally:
         session.close()

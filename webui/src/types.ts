@@ -73,14 +73,22 @@ export interface SettingsView {
     schedule_collect_jockeys_enabled: boolean;
     schedule_collect_trainers_enabled: boolean;
     schedule_train_enabled: boolean;
-    schedule_collect_interval_minutes: number;
-    schedule_predict_interval_minutes: number;
-    schedule_collect_horses_interval_minutes: number;
-    schedule_collect_jockeys_interval_minutes: number;
-    schedule_collect_trainers_interval_minutes: number;
-    schedule_train_interval_minutes: number;
-    schedule_bet_decide_before_start_minutes: number;
-    schedule_settle_after_start_minutes: number;
+    schedule_collect_interval_minutes: number | null;
+    schedule_predict_interval_minutes: number | null;
+    schedule_collect_horses_interval_minutes: number | null;
+    schedule_collect_jockeys_interval_minutes: number | null;
+    schedule_collect_trainers_interval_minutes: number | null;
+    schedule_train_interval_minutes: number | null;
+    schedule_bet_decide_before_start_minutes: number | null;
+    schedule_settle_after_start_minutes: number | null;
+    schedule_collect_time: string | null;
+    schedule_predict_time: string | null;
+    schedule_collect_horses_time: string | null;
+    schedule_collect_jockeys_time: string | null;
+    schedule_collect_trainers_time: string | null;
+    schedule_train_time: string | null;
+    schedule_bet_decide_time: string | null;
+    schedule_settle_time: string | null;
     schedule_collect_days: string;
     schedule_predict_days: string;
     schedule_collect_horses_days: string;
@@ -105,6 +113,7 @@ export interface ScheduledJobSetting {
   interval_key: keyof SettingsView["editable"] | null;
   before_start_key: keyof SettingsView["editable"] | null;
   after_start_key: keyof SettingsView["editable"] | null;
+  time_key: keyof SettingsView["editable"] | null;
   days_key: keyof SettingsView["editable"];
   label: string;
   description: string;
@@ -112,6 +121,7 @@ export interface ScheduledJobSetting {
   interval_minutes: number | null;
   before_start_minutes: number | null;
   after_start_minutes: number | null;
+  exact_time: string | null;
   days: number[];
   next_run_at: string | null;
 }
