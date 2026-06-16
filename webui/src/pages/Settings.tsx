@@ -1,9 +1,43 @@
 import { useEffect, useState } from "react";
 import { formatDateTime, getJSON, postJSON, putJSON } from "../api";
 import { ErrorNote } from "../components";
-import type { ScheduledJobSetting, SettingsView } from "../types";
+import type { ModelParamKey, ScheduledJobSetting, SettingsView } from "../types";
 
 type ScheduleForm = Record<string, string | boolean>;
+type ModelForm = Record<string, string>;
+type FeatureForm = Record<string, boolean>;
+
+// モデル学習パラメータの入力欄定義(キー・ラベル・入力刻み・最小値)
+const MODEL_PARAMS: { key: ModelParamKey; label: string; step: number; min: number }[] = [
+  { key: "model_learning_rate", label: "学習率 (learning_rate)", step: 0.01, min: 0 },
+  { key: "model_num_leaves", label: "葉の数 (num_leaves)", step: 1, min: 2 },
+  { key: "model_max_depth", label: "木の最大深さ (max_depth, -1=無制限)", step: 1, min: -1 },
+  { key: "model_min_child_samples", label: "葉の最小データ数 (min_child_samples)", step: 1, min: 1 },
+  { key: "model_feature_fraction", label: "特徴量サンプリング率 (feature_fraction)", step: 0.05, min: 0 },
+  { key: "model_bagging_fraction", label: "データサンプリング率 (bagging_fraction)", step: 0.05, min: 0 },
+  { key: "model_reg_alpha", label: "L1正則化 (reg_alpha)", step: 0.1, min: 0 },
+  { key: "model_reg_lambda", label: "L2正則化 (reg_lambda)", step: 0.1, min: 0 },
+  { key: "model_max_boost_rounds", label: "最大ブースティング回数 (max_boost_rounds)", step: 50, min: 1 },
+  { key: "model_early_stopping_rounds", label: "早期終了ラウンド (early_stopping_rounds)", step: 5, min: 1 },
+  { key: "model_valid_fraction", label: "検証データの割合 (valid_fraction)", step: 0.05, min: 0 },
+  { key: "model_min_races", label: "学習に必要な最小レース数 (min_races)", step: 5, min: 1 },
+];
+
+function modelToForm(editable: SettingsView["editable"]): ModelForm {
+  const form: ModelForm = {};
+  for (const p of MODEL_PARAMS) form[p.key] = String(editable[p.key]);
+  form.model_train_start_date = String(editable.model_train_start_date ?? "");
+  form.model_train_end_date = String(editable.model_train_end_date ?? "");
+  return form;
+}
+
+function featuresToForm(view: SettingsView): FeatureForm {
+  const form: FeatureForm = {};
+  for (const group of view.model_features) {
+    for (const feature of group.features) form[feature.name] = feature.enabled;
+  }
+  return form;
+}
 
 // 曜日番号はPythonのdate.weekday()に合わせ、月=0〜日=6。表示は日曜始まり。
 const WEEKDAYS: { label: string; value: number }[] = [
@@ -55,6 +89,8 @@ export default function SettingsPage() {
     bet_min_expected_value: "1.0",
   });
   const [scheduleForm, setScheduleForm] = useState<ScheduleForm>({});
+  const [modelForm, setModelForm] = useState<ModelForm>({});
+  const [featureForm, setFeatureForm] = useState<FeatureForm>({});
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -68,6 +104,20 @@ export default function SettingsPage() {
       bet_min_expected_value: String(v.editable.bet_min_expected_value),
     });
     setScheduleForm(scheduleToForm(v.scheduled_jobs));
+    setModelForm(modelToForm(v.editable));
+    setFeatureForm(featuresToForm(v));
+  };
+
+  const toggleFeature = (name: string) => {
+    setFeatureForm((prev) => ({ ...prev, [name]: !prev[name] }));
+  };
+
+  const setGroupFeatures = (names: string[], value: boolean) => {
+    setFeatureForm((prev) => {
+      const next = { ...prev };
+      for (const name of names) next[name] = value;
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -151,6 +201,16 @@ export default function SettingsPage() {
         }
         payload[job.days_key] = String(scheduleForm[job.days_key] ?? "");
       }
+
+      for (const p of MODEL_PARAMS) {
+        payload[p.key] = Number(modelForm[p.key]);
+      }
+      payload.model_train_start_date = modelForm.model_train_start_date ?? "";
+      payload.model_train_end_date = modelForm.model_train_end_date ?? "";
+      const enabledFeatures = Object.entries(featureForm)
+        .filter(([, on]) => on)
+        .map(([name]) => name);
+      payload.model_enabled_features = enabledFeatures.join(",");
 
       const updated = await putJSON<SettingsView>("/api/settings", payload);
       applyView(updated);
@@ -236,6 +296,7 @@ export default function SettingsPage() {
       <p className="muted">
         賭け対象決定と決済は固定の確認間隔ではなく、レースの発走時刻を基準に実行します。
       </p>
+      <div className="table-scroll">
       <table className="table settings-schedule-table">
         <thead>
           <tr>
@@ -344,6 +405,100 @@ export default function SettingsPage() {
           })}
         </tbody>
       </table>
+      </div>
+
+      <h2>モデルの学習期間</h2>
+      <p className="muted">
+        学習に使う確定レースの期間です。空欄なら全期間。変更は次回のモデル学習(再学習)から反映されます。
+      </p>
+      <div className="backfill-form">
+        <label>
+          <span>開始日</span>
+          <input
+            type="date"
+            value={modelForm.model_train_start_date ?? ""}
+            onChange={(e) =>
+              setModelForm({ ...modelForm, model_train_start_date: e.target.value })
+            }
+          />
+        </label>
+        <label>
+          <span>終了日</span>
+          <input
+            type="date"
+            value={modelForm.model_train_end_date ?? ""}
+            onChange={(e) =>
+              setModelForm({ ...modelForm, model_train_end_date: e.target.value })
+            }
+          />
+        </label>
+      </div>
+
+      <h2>学習パラメータ</h2>
+      <p className="muted">
+        LightGBMのハイパーパラメータです。変更は次回のモデル学習(再学習)から反映されます。
+      </p>
+      <div className="form model-params-form">
+        {MODEL_PARAMS.map((p) => (
+          <label key={p.key}>
+            <span>{p.label}</span>
+            <input
+              type="number"
+              step={p.step}
+              min={p.min}
+              value={modelForm[p.key] ?? ""}
+              onChange={(e) => setModelForm({ ...modelForm, [p.key]: e.target.value })}
+            />
+          </label>
+        ))}
+      </div>
+
+      <h2>使用特徴量</h2>
+      <p className="muted">
+        学習に使う特徴量を選びます。チェックを外した特徴量は次回のモデル学習から除外されます
+        (すべて外した場合は安全のため全特徴量で学習します)。「欠損n%」は最新学習時点で値が欠けていた割合です。
+      </p>
+      <div className="feature-select">
+        {(view?.model_features ?? []).map((group) => {
+          const names = group.features.map((f) => f.name);
+          return (
+            <div key={group.group} className="feature-select-group">
+              <div className="feature-select-head">
+                <h3>{group.group}</h3>
+                <div className="feature-select-actions">
+                  <button type="button" onClick={() => setGroupFeatures(names, true)}>
+                    全選択
+                  </button>
+                  <button type="button" onClick={() => setGroupFeatures(names, false)}>
+                    全解除
+                  </button>
+                </div>
+              </div>
+              <div className="feature-checkboxes">
+                {group.features.map((feature) => (
+                  <label key={feature.name} className="feature-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(featureForm[feature.name])}
+                      onChange={() => toggleFeature(feature.name)}
+                    />
+                    <span>
+                      {feature.label}
+                      {feature.categorical && <span className="muted"> (カテゴリ)</span>}
+                      {feature.missing_rate != null && (
+                        <span className="muted feature-missing">
+                          {" "}
+                          欠損{(feature.missing_rate * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       <div className="schedule-actions">
         <button className="primary" onClick={save} disabled={saving}>
