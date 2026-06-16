@@ -125,7 +125,15 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 ### horses / horse_results
 
-`horses` は馬ごとの基本情報、`horse_results` は馬ごとの過去戦績です。過去戦績は特徴量生成に使うため、対象レース日より前の行だけを参照します。
+`horses` は馬ごとの基本情報、`horse_results` は馬ごとの過去戦績です。過去戦績は特徴量生成に使うため、対象レース日より前の行だけを参照します。`jockey_results` / `trainer_results` も同様に騎手・調教師の過去戦績を保存します。
+
+### horse_pedigree
+
+馬の血統(最大5代血統表)です。1行=1先祖で、`horse_id`・`generation`(1〜5)・`position`(世代内 0..2^generation−1, 父系先)・`ancestor_horse_id`(海外馬等は None)・`ancestor_name` を持ち、`(horse_id, generation, position)` が一意です。
+
+### race_collection_status
+
+成績収集の進捗フラグです。`race_id`・`kind`(`horse_results` / `jockey_results` / `trainer_results`)・`collected_at` を持ち、`(race_id, kind)` が一意。`races` への列追加は `create_all` が反映しないため、別テーブルで持ちます。
 
 ### predictions
 
@@ -255,14 +263,16 @@ Web UI で変更できる主な設定:
 
 終了したレースは `result.html` から着順と払戻を取得します。直近の終了レースは定期収集時にも再確認します。
 
-### 馬の過去戦績と血統
+### 過去戦績の収集(レース起点・期間付き・漸進的)
 
-馬 ID を持つ出走馬を対象に以下を取得します。
+馬・騎手・調教師の過去戦績は **races(レース一覧)を起点**に収集します。`RaceCollectionStatus` に種別(`horse_results` / `jockey_results` / `trainer_results`)ごとの取得済みフラグを持ち、未収集のレースを新しい順に最大 `RESULTS_RACES_PER_RUN` 件処理し、そのレースの全参加者の成績を取り切ったらフラグを立てます。各成績は**追記のみ**(既存 `(race_key, horse_id)` はスキップ)で保存し、履歴を消さずに積み増します。
 
-- `https://db.netkeiba.com/horse/result/{horse_id}/`
-- `https://db.netkeiba.com/horse/ped/{horse_id}/`
+- **馬**: `https://db.netkeiba.com/horse/result/{horse_id}/`(全キャリアが1ページ)。同一馬は1回取れば十分なので run 内で重複取得しません。
+- **騎手 / 調教師**: `/?pid={type}_select&id={id}&year=YYYY&mode={r1|r2|r3|r4}&page=N`。recent ページは直近約20走のみで不足するため、着順区分 r1〜r4(1〜3着・着外)を合算し `&page=N` でページングして年内全件を取得します。対象年はそのレースの開催年と前年(`PERSON_RESULTS_YEARS_BACK`、既定1=当年＋前年)。エンティティの既存 `race_key` 集合を渡し、既知レースに達した時点で打ち切ります(漸進収集=再ダウンロード回避)。同一(エンティティ, 年ウィンドウ)は run 内で1回のみ取得します。
 
-過去戦績は馬ごとに既存行を削除してから最新一覧を保存します。血統は父馬 ID と父馬名を特徴量用に保存します。
+### 血統(5代血統表)
+
+馬 ID を持つ出走馬の血統を `https://db.netkeiba.com/horse/ped/{horse_id}/` から取得します。血統表(`table.blood_table`)は先祖セルの `rowspan` が世代を表す(5代なら gen1=16〜gen5=1)ため、`gen = total_gens − log2(rowspan)` で世代を、同一 rowspan のセルの文書順(上→下=父系先)で `position` を決め、最大5代(最大62先祖)を `HorsePedigree` に保存します。父(gen1/position0)は後方互換のため `horses.sire_id` / `sire_name` にも保存します。血統が未取得の馬だけ取得します(`HorsePedigree` 行の有無で判定)。
 
 ## 特徴量生成
 

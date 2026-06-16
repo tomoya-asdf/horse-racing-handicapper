@@ -56,6 +56,12 @@ class Settings:
     JOCKEY_RESULTS_REFRESH_DAYS: int = int(os.environ.get("JOCKEY_RESULTS_REFRESH_DAYS", "30"))
     TRAINER_RESULTS_PER_RUN: int = int(os.environ.get("TRAINER_RESULTS_PER_RUN", "30"))
     TRAINER_RESULTS_REFRESH_DAYS: int = int(os.environ.get("TRAINER_RESULTS_REFRESH_DAYS", "30"))
+    # 成績収集はraces起点で駆動する。1回の収集で処理する未取得レース数の上限。
+    RESULTS_RACES_PER_RUN: int = int(os.environ.get("RESULTS_RACES_PER_RUN", "50"))
+    # 騎手/調教師の成績を遡る年数。0=当年のみ、1=当年＋前年(既定)。各レースの開催年が起点。
+    PERSON_RESULTS_YEARS_BACK: int = int(os.environ.get("PERSON_RESULTS_YEARS_BACK", "1"))
+    # 馬の血統を何代まで収集するか(5代血統表)。
+    HORSE_PEDIGREE_GENERATIONS: int = int(os.environ.get("HORSE_PEDIGREE_GENERATIONS", "5"))
 
     # IPAT (JRA即時購入) 自動操作
     IPAT_SUBSCRIBER_NUMBER: str = os.environ.get("IPAT_SUBSCRIBER_NUMBER", "")

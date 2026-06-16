@@ -35,6 +35,7 @@ from src.common.models import (
     BettingMode,
     Entry,
     Horse,
+    HorsePedigree,
     HorseResult,
     Jockey,
     JockeyResult,
@@ -42,6 +43,7 @@ from src.common.models import (
     ModelVersion,
     Prediction,
     Race,
+    RaceCollectionStatus,
     Trainer,
     TrainerResult,
 )
@@ -743,6 +745,17 @@ def race_detail(request: Request, race_id: int) -> dict:
                 for p in race.predictions
                 if p.model_version == model_version
             }
+        collected_kinds = {
+            kind
+            for (kind,) in session.query(RaceCollectionStatus.kind).filter(
+                RaceCollectionStatus.race_id == race_id
+            )
+        }
+        collection_status = {
+            "horse_results": "horse_results" in collected_kinds,
+            "jockey_results": "jockey_results" in collected_kinds,
+            "trainer_results": "trainer_results" in collected_kinds,
+        }
         visible_bets = [b for b in race.bets if is_admin or b.mode != BettingMode.PROD.value]
         bet_entry_ids = {b.entry_id for b in visible_bets}
         betting_config = load_betting_config()
@@ -942,6 +955,7 @@ def race_detail(request: Request, race_id: int) -> dict:
             "entries": entries,
             "bet_candidates": bet_candidates,
             "bets": bets,
+            "collection_status": collection_status,
         }
     finally:
         session.close()
@@ -973,12 +987,28 @@ def horse_detail(horse_id: str) -> dict:
             sire_name = horse.sire_name if horse else None
             results_fetched_at = _iso(horse.results_fetched_at) if horse else None
 
+        pedigree = (
+            session.query(HorsePedigree)
+            .filter(HorsePedigree.horse_id == horse_id)
+            .order_by(HorsePedigree.generation.asc(), HorsePedigree.position.asc())
+            .all()
+        )
+
         return {
             "horse_id": horse_id,
             "name": name,
             "sire_id": sire_id,
             "sire_name": sire_name,
             "results_fetched_at": results_fetched_at,
+            "pedigree": [
+                {
+                    "generation": p.generation,
+                    "position": p.position,
+                    "ancestor_horse_id": p.ancestor_horse_id,
+                    "ancestor_name": p.ancestor_name,
+                }
+                for p in pedigree
+            ],
             "results": [
                 {
                     "race_key": r.race_key,

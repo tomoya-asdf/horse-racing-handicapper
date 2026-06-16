@@ -182,10 +182,26 @@ function RaceDetailView({ raceId }: { raceId: number }) {
   if (!data) return <div className="loading">読み込み中...</div>;
 
   const sortedEntries = sortEntries(data.entries, sort);
+  const collectionFlags: { label: string; done: boolean }[] = [
+    { label: "馬成績", done: data.collection_status.horse_results },
+    { label: "騎手成績", done: data.collection_status.jockey_results },
+    { label: "調教師成績", done: data.collection_status.trainer_results },
+  ];
 
   return (
     <div className="race-detail">
       {formatConditions(data) && <p className="race-conditions">{formatConditions(data)}</p>}
+      <div className="collection-status">
+        <span className="muted">過去成績の収集状況:</span>
+        {collectionFlags.map((flag) => (
+          <span
+            key={flag.label}
+            className={`collection-badge ${flag.done ? "collected" : "pending"}`}
+          >
+            {flag.label}: {flag.done ? "収集済" : "未収集"}
+          </span>
+        ))}
+      </div>
       {data.model_version && (
         <p className="muted">
           予測モデル:{" "}

@@ -133,7 +133,8 @@ export default function App() {
     <div className="app">
       {!detailPageOpen && <header className="header">
         <h1>
-          🏇競馬予測AI <span className="header-sub">（プロトタイプ）</span>
+          <img className="header-logo" src="/favicon.svg" alt="" aria-hidden="true" />
+          競馬予測AI <span className="header-sub">（プロトタイプ）</span>
         </h1>
         <div className="header-nav">
           <nav className="tabs">

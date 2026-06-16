@@ -351,6 +351,13 @@ export interface RaceDetail {
   entries: RaceEntry[];
   bet_candidates: RaceBetCandidate[];
   bets: RaceBet[];
+  collection_status: RaceCollectionStatus;
+}
+
+export interface RaceCollectionStatus {
+  horse_results: boolean;
+  jockey_results: boolean;
+  trainer_results: boolean;
 }
 
 export interface RaceBetCandidate {
@@ -406,12 +413,20 @@ export interface HorseResult {
   horse_weight: number | null;
 }
 
+export interface PedigreeAncestor {
+  generation: number;
+  position: number;
+  ancestor_horse_id: string | null;
+  ancestor_name: string | null;
+}
+
 export interface HorseDetail {
   horse_id: string;
   name: string | null;
   sire_id: string | null;
   sire_name: string | null;
   results_fetched_at: string | null;
+  pedigree: PedigreeAncestor[];
   results: HorseResult[];
 }
 

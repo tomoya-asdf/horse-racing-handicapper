@@ -338,6 +338,44 @@ class Bet(Base):
     entry = relationship("Entry")
 
 
+class RaceCollectionStatus(Base):
+    """レース単位の成績収集フラグ。
+
+    収集は races を起点に駆動し、あるレースの全参加者(馬/騎手/調教師)の成績を
+    取り切ったら、その (race_id, kind) を記録して再処理を避ける。``races`` への列追加は
+    create_all が反映しないため、別テーブルで持つ。
+    """
+
+    __tablename__ = "race_collection_status"
+    __table_args__ = (UniqueConstraint("race_id", "kind", name="uq_race_collection_status"),)
+
+    id = Column(Integer, primary_key=True)
+    race_id = Column(Integer, ForeignKey("races.id"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)  # horse_results / jockey_results / trainer_results
+    collected_at = Column(DateTime, default=now_jst)
+
+
+class HorsePedigree(Base):
+    """馬の血統(最大5代血統表)。1行=1先祖。
+
+    ``generation`` は1(父母)〜5、``position`` は世代内の上→下(父系先)の0始まり連番
+    (0..2^generation-1)。海外馬などIDを持たない先祖は ``ancestor_horse_id`` が None。
+    """
+
+    __tablename__ = "horse_pedigree"
+    __table_args__ = (
+        UniqueConstraint("horse_id", "generation", "position", name="uq_horse_pedigree_pos"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    horse_id = Column(String, index=True, nullable=False)
+    generation = Column(Integer, nullable=False)
+    position = Column(Integer, nullable=False)
+    ancestor_horse_id = Column(String)
+    ancestor_name = Column(String)
+    created_at = Column(DateTime, default=now_jst)
+
+
 class RaceOdds(Base):
     __tablename__ = "race_odds"
     __table_args__ = (

@@ -1704,3 +1704,123 @@ select:focus-visible,
 *::-webkit-scrollbar-thumb:hover {
   background: #3a4654;
 }
+
+/* ヘッダーのロゴ(favicon.svg) */
+.header-logo {
+  width: 1.4em;
+  height: 1.4em;
+  vertical-align: -0.3em;
+  margin-right: 6px;
+}
+
+/* レース詳細: 過去成績の収集状況バッジ */
+.collection-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.collection-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.collection-badge.collected {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.collection-badge.pending {
+  color: var(--text-muted);
+}
+
+/* 馬詳細: 5代血統表 */
+.pedigree-section {
+  margin: 12px 0;
+}
+
+.pedigree-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.pedigree-table {
+  table-layout: fixed;
+}
+
+.pedigree-table td.ped-cell {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.pedigree-table td.ped-gen-1 {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+
+.pedigree-table td.ped-gen-2 {
+  background: var(--bg-card);
+}
+
+/* トースト通知(画面右下) */
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 360px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  animation: toast-in 0.2s ease-out;
+}
+
+.toast-success {
+  border-left: 4px solid var(--green);
+}
+
+.toast-error {
+  border-left: 4px solid var(--red);
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.toast-close:hover {
+  color: var(--text);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatDateTime, getJSON, postJSON, putJSON } from "../api";
-import { ErrorNote } from "../components";
+import { ErrorNote, Toast } from "../components";
 import type { ModelParamKey, ScheduledJobSetting, SettingsView } from "../types";
 
 type ScheduleForm = Record<string, string | boolean>;
@@ -93,7 +93,9 @@ export default function SettingsPage() {
   const [featureForm, setFeatureForm] = useState<FeatureForm>({});
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [reloading, setReloading] = useState(false);
 
   const applyView = (v: SettingsView) => {
     setView(v);
@@ -215,10 +217,27 @@ export default function SettingsPage() {
       const updated = await putJSON<SettingsView>("/api/settings", payload);
       applyView(updated);
       setMessage("設定を保存しました。次回のジョブ確認から反映されます。");
+      setToast("設定を保存しました。次回のジョブ確認から反映されます。");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // 編集途中の内容を破棄し、DBの保存済み設定を読み込み直す
+  const discard = async () => {
+    setError(null);
+    setMessage(null);
+    setReloading(true);
+    try {
+      const fresh = await getJSON<SettingsView>("/api/settings");
+      applyView(fresh);
+      setToast("編集を破棄しました。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReloading(false);
     }
   };
 
@@ -241,6 +260,7 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-page">
+      <Toast message={toast} onClose={() => setToast(null)} />
       <h2>賭け設定</h2>
       <ErrorNote message={error} />
       {message && <div className="info-note">{message}</div>}
@@ -434,7 +454,7 @@ export default function SettingsPage() {
         </label>
       </div>
 
-      <h2>学習パラメータ</h2>
+      <h2>モ学習パラメータ</h2>
       <p className="muted">
         LightGBMのハイパーパラメータです。変更は次回のモデル学習(再学習)から反映されます。
       </p>
@@ -501,8 +521,16 @@ export default function SettingsPage() {
       </div>
 
       <div className="schedule-actions">
-        <button className="primary" onClick={save} disabled={saving}>
+        <button className="primary" onClick={save} disabled={saving || reloading}>
           {saving ? "保存中..." : "保存"}
+        </button>
+        <button
+          className="secondary"
+          onClick={() => void discard()}
+          disabled={saving || reloading}
+          title="編集途中の内容を破棄して、保存済みの設定を読み込み直します"
+        >
+          {reloading ? "読み込み中..." : "中止(変更を破棄)"}
         </button>
         <span className="muted">変更は保存を押すまで反映されません。</span>
       </div>

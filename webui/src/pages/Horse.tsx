@@ -1,6 +1,55 @@
 import { getJSON, formatDate, formatFullDateTime } from "../api";
 import { ErrorNote, usePolling } from "../components";
-import type { HorseDetail } from "../types";
+import type { HorseDetail, PedigreeAncestor } from "../types";
+
+// 5代血統表。各先祖は世代gごとに 2^(maxGen-g) 行を rowspan で占める(netkeiba風)。
+function PedigreeTable({ pedigree }: { pedigree: PedigreeAncestor[] }) {
+  if (pedigree.length === 0) {
+    return (
+      <p className="muted">
+        血統はまだ収集されていません。ジョブの「馬過去成績収集」を実行すると表示されます。
+      </p>
+    );
+  }
+  const maxGen = pedigree.reduce((m, a) => Math.max(m, a.generation), 0);
+  const totalRows = 2 ** maxGen;
+  const byPos = new Map<string, PedigreeAncestor>();
+  for (const a of pedigree) byPos.set(`${a.generation}:${a.position}`, a);
+
+  const rows = [];
+  for (let r = 0; r < totalRows; r++) {
+    const cells = [];
+    for (let g = 1; g <= maxGen; g++) {
+      const span = 2 ** (maxGen - g);
+      if (r % span !== 0) continue; // このセルは上のrowspanに含まれる
+      const pos = r / span;
+      const anc = byPos.get(`${g}:${pos}`);
+      cells.push(
+        <td key={g} rowSpan={span} className={`ped-cell ped-gen-${g}`}>
+          {anc?.ancestor_horse_id ? (
+            <a
+              className="link-button"
+              href={`/horses/${encodeURIComponent(anc.ancestor_horse_id)}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {anc.ancestor_name ?? anc.ancestor_horse_id}
+            </a>
+          ) : (
+            anc?.ancestor_name ?? "-"
+          )}
+        </td>
+      );
+    }
+    rows.push(<tr key={r}>{cells}</tr>);
+  }
+
+  return (
+    <table className="table pedigree-table">
+      <tbody>{rows}</tbody>
+    </table>
+  );
+}
 
 function formatCourse(track: string | null, distance: number | null): string {
   const course = `${track ?? ""}${distance ? `${distance}m` : ""}`;
@@ -36,6 +85,10 @@ export default function HorsePage({ horseId }: { horseId: string }) {
           </div>
         </div>
       </div>
+      <details className="pedigree-section" open>
+        <summary>5代血統表</summary>
+        <PedigreeTable pedigree={data.pedigree} />
+      </details>
       {data.results.length === 0 ? (
         <p className="muted">
           過去戦績はまだ収集されていません。ジョブの「馬過去成績収集」を実行すると表示されます。

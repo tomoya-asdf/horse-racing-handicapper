@@ -11,14 +11,21 @@ from src.common.dynamic_config import load_scheduled_job_config
 from src.common.models import (
     Entry,
     Horse,
+    HorsePedigree,
     HorseResult,
     Jockey,
     JockeyResult,
     Race,
+    RaceCollectionStatus,
     Trainer,
     TrainerResult,
 )
 from src.common.timeutils import now_jst
+
+# races 起点の成績収集の種別(RaceCollectionStatus.kind と一致)
+KIND_HORSE = "horse_results"
+KIND_JOCKEY = "jockey_results"
+KIND_TRAINER = "trainer_results"
 
 logging.basicConfig(level=logging.INFO)
 # 5秒間隔のジョブポーリングがINFOログを埋め尽くすため、APSchedulerのログは抑制する
@@ -154,25 +161,64 @@ def _update_finished_results() -> int:
     return updated
 
 
+# ---- races 起点の収集ドライバ共通部 ----
+
+def _target_years(race_date) -> list[int]:
+    """そのレースの開催年と、設定分だけ遡った年のリスト([年, 年-1, …])。"""
+    year = race_date.year if race_date is not None else now_jst().year
+    back = max(0, settings.PERSON_RESULTS_YEARS_BACK)
+    return [year - offset for offset in range(back + 1)]
+
+
+def _races_needing_collection(session, kind: str, limit: int):
+    """まだ ``kind`` の収集が済んでいないレースを新しい順に最大 ``limit`` 件返す。"""
+    done = session.query(RaceCollectionStatus.race_id).filter(RaceCollectionStatus.kind == kind)
+    return (
+        session.query(Race)
+        .filter(Race.id.notin_(done))
+        .order_by(Race.race_date.desc(), Race.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _mark_race_collected(session, race_id: int, kind: str) -> None:
+    exists = (
+        session.query(RaceCollectionStatus.id)
+        .filter_by(race_id=race_id, kind=kind)
+        .first()
+    )
+    if exists is None:
+        session.add(RaceCollectionStatus(race_id=race_id, kind=kind))
+
+
+# ---- 馬の過去成績・血統 ----
+
 def _upsert_horse_results(
     session, horse_id: str, name: str | None, results: list[dict], sire: dict | None = None
 ) -> None:
-    """1頭分の過去成績をhorse_resultsへ反映し、馬マスタ(名前・父・取得時刻)を更新する。
+    """1頭分の過去成績を horse_results へ**追記のみ**で反映し、馬マスタを更新する。
 
-    後から走が増えるため、再取得時は既存行を全件入れ替えて重複なく保つ。
-    取得を試みた事実をhorsesに記録し、新馬(0件)を毎回取りに行かないようにする。
-    ``sire`` を渡すと父(sire_id/sire_name)も同じhorse行に保存する。
+    既存行は消さず、未保存の race_key だけを追加する(継続収集で履歴を積み増す)。
+    ``sire`` を渡すと父(sire_id/sire_name)も同じ horse 行に保存する。
     """
-    session.query(HorseResult).filter(HorseResult.horse_id == horse_id).delete()
-    # (horse_id, race_key) は一意。同一fetch内で同じrace_keyが重複した場合に備えて
-    # 非nullのrace_keyの重複を除く(race_key=Noneの行は複数あってよい)
-    seen_keys: set[str] = set()
+    existing = {
+        key
+        for (key,) in session.query(HorseResult.race_key)
+        .filter(HorseResult.horse_id == horse_id, HorseResult.race_key.isnot(None))
+        .all()
+    }
+    had_any = bool(existing)
+    seen: set[str] = set()
     for row in results:
         key = row.get("race_key")
         if key is not None:
-            if key in seen_keys:
+            if key in existing or key in seen:
                 continue
-            seen_keys.add(key)
+            seen.add(key)
+        elif had_any:
+            # race_key 無し行は再取得時に重複しやすいので、既存がある馬では追加しない
+            continue
         session.add(HorseResult(horse_id=horse_id, **row))
 
     horse = session.get(Horse, horse_id)
@@ -187,99 +233,136 @@ def _upsert_horse_results(
     horse.results_fetched_at = now_jst()
 
 
-def _horse_ids_to_fetch(session, limit: int) -> list[str]:
-    """過去成績が未取得、または取得が古い馬のIDを差分的に返す。"""
-    stale_before = now_jst() - timedelta(days=settings.HORSE_RESULTS_REFRESH_DAYS)
-    rows = (
-        session.query(Entry.horse_id)
-        .outerjoin(Horse, Horse.horse_id == Entry.horse_id)
-        .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
-        .filter((Horse.horse_id.is_(None)) | (Horse.results_fetched_at < stale_before))
-        .distinct()
-        .limit(limit)
+def _upsert_horse_pedigree(session, horse_id: str, ancestors: list[dict]) -> None:
+    """5代血統表の先祖を horse_pedigree へ**追記のみ**で保存する((generation, position) 一意)。"""
+    existing = {
+        (gen, pos)
+        for gen, pos in session.query(HorsePedigree.generation, HorsePedigree.position)
+        .filter(HorsePedigree.horse_id == horse_id)
         .all()
-    )
-    return [row[0] for row in rows]
+    }
+    for anc in ancestors:
+        slot = (anc["generation"], anc["position"])
+        if slot in existing:
+            continue
+        existing.add(slot)
+        session.add(
+            HorsePedigree(
+                horse_id=horse_id,
+                generation=anc["generation"],
+                position=anc["position"],
+                ancestor_horse_id=anc.get("horse_id"),
+                ancestor_name=anc.get("name"),
+            )
+        )
 
 
-def _known_sire_ids(session, horse_ids: list[str]) -> set[str]:
-    """``horse_ids`` のうち父(sire_id)が取得済みの馬IDを返す。
-
-    父は1頭1回取れば十分なので、ここに含まれる馬は血統取得をスキップする。
-    """
+def _horses_with_pedigree(session, horse_ids: list[str]) -> set[str]:
+    """``horse_ids`` のうち血統(horse_pedigree)を取得済みの馬IDを返す。"""
     if not horse_ids:
         return set()
     return {
         row[0]
-        for row in session.query(Horse.horse_id)
-        .filter(Horse.horse_id.in_(horse_ids), Horse.sire_id.isnot(None))
+        for row in session.query(HorsePedigree.horse_id)
+        .filter(HorsePedigree.horse_id.in_(horse_ids))
+        .distinct()
         .all()
     }
 
 
-def _fetch_and_store_horse_results(horse_ids: list[str], sire_known: set[str]) -> int:
-    """馬IDを順に取得し、過去成績(と未取得なら血統)を horse_results へ保存する。
+def _fetch_and_store_one_horse(horse_id: str, need_pedigree: bool) -> bool:
+    """1頭の過去成績(と未取得なら5代血統)を取得・保存する。成功で True。"""
+    try:
+        data = scraper.fetch_horse_results(horse_id)
+    except Exception as exc:
+        logger.warning("failed to fetch horse results horse_id=%s: %s", horse_id, exc)
+        return False
 
-    netkeibaへの負荷を抑えるため馬ごとに短いトランザクションでコミットし、途中失敗で
-    前の馬の成果を失わないようにする。``sire_known`` の馬は父が取得済みのため血統取得を
-    スキップする。保存できた頭数を返す。
-    """
-    fetched = 0
-    for horse_id in horse_ids:
+    ped = None
+    if need_pedigree:
         try:
-            data = scraper.fetch_horse_results(horse_id)
+            ped = scraper.fetch_horse_pedigree_full(horse_id, settings.HORSE_PEDIGREE_GENERATIONS)
         except Exception as exc:
-            logger.warning("failed to fetch horse results horse_id=%s: %s", horse_id, exc)
-            continue
+            logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
 
-        ped = None
-        if horse_id not in sire_known:
-            try:
-                ped = scraper.fetch_horse_pedigree(horse_id)
-            except Exception as exc:
-                logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
-
-        session = get_session()
-        try:
-            _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
-            session.commit()
-            fetched += 1
-        except Exception:
-            session.rollback()
-            logger.exception("failed to upsert horse results horse_id=%s", horse_id)
-        finally:
-            session.close()
-    return fetched
-
-
-def _update_horse_results(limit: int) -> int:
-    """出走馬のうち過去成績が未取得・古い馬を最大limit頭まで収集する。
-
-    netkeibaへの負荷を抑えるため頭数を制限し、馬ごとに短いトランザクションで
-    コミットする(途中失敗で前の馬の成果を失わないため)。
-    """
-    if limit <= 0:
-        return 0
     session = get_session()
     try:
-        horse_ids = _horse_ids_to_fetch(session, limit)
-        sire_known = _known_sire_ids(session, horse_ids)
+        _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
+        if ped and ped.get("ancestors"):
+            _upsert_horse_pedigree(session, horse_id, ped["ancestors"])
+        session.commit()
+        return True
+    except Exception:
+        session.rollback()
+        logger.exception("failed to upsert horse results horse_id=%s", horse_id)
+        return False
     finally:
         session.close()
 
-    return _fetch_and_store_horse_results(horse_ids, sire_known)
+
+def _update_horse_results(max_races: int) -> int:
+    """races 起点で、未収集レースの出走馬の過去成績・血統を集める。処理レース数を返す。"""
+    if max_races <= 0:
+        return 0
+    session = get_session()
+    try:
+        races = _races_needing_collection(session, KIND_HORSE, max_races)
+        race_infos = [
+            (race.id, [e.horse_id for e in race.entries if e.horse_id]) for race in races
+        ]
+    finally:
+        session.close()
+
+    fetched_horses: set[str] = set()
+    processed = 0
+    for race_id, horse_ids in race_infos:
+        unique_ids = list(dict.fromkeys(horse_ids))
+        session = get_session()
+        try:
+            ped_known = _horses_with_pedigree(session, unique_ids)
+        finally:
+            session.close()
+        for horse_id in unique_ids:
+            if horse_id in fetched_horses:
+                continue
+            fetched_horses.add(horse_id)
+            _fetch_and_store_one_horse(horse_id, horse_id not in ped_known)
+        session = get_session()
+        try:
+            _mark_race_collected(session, race_id, KIND_HORSE)
+            session.commit()
+        finally:
+            session.close()
+        processed += 1
+    return processed
+
+
+# ---- 騎手・調教師の過去成績 ----
+
+def _upsert_person_results(session, model, id_attr: str, entity_id: str, results: list[dict]) -> None:
+    """騎手/調教師の成績を**追記のみ**で反映する((race_key, horse_id) で重複排除)。
+
+    調教師は同一レースに複数頭を出すため、race_key 単独でなく (race_key, horse_id) で一意。
+    """
+    existing = set(
+        session.query(model.race_key, model.horse_id)
+        .filter(getattr(model, id_attr) == entity_id)
+        .all()
+    )
+    seen: set[tuple[str | None, str | None]] = set()
+    for row in results:
+        key = (row.get("race_key"), row.get("horse_id"))
+        if key[0] is None:
+            if existing:  # race_key 無し行は既存がある相手では追加しない(重複防止)
+                continue
+        elif key in existing or key in seen:
+            continue
+        seen.add(key)
+        session.add(model(**{id_attr: entity_id}, **row))
 
 
 def _upsert_jockey_results(session, jockey_id: str, name: str | None, results: list[dict]) -> None:
-    session.query(JockeyResult).filter(JockeyResult.jockey_id == jockey_id).delete()
-    seen_keys: set[tuple[str | None, str | None]] = set()
-    for row in results:
-        key = (row.get("race_key"), row.get("horse_id"))
-        if key[0] is not None and key in seen_keys:
-            continue
-        seen_keys.add(key)
-        session.add(JockeyResult(jockey_id=jockey_id, **row))
-
+    _upsert_person_results(session, JockeyResult, "jockey_id", jockey_id, results)
     jockey = session.get(Jockey, jockey_id)
     if jockey is None:
         jockey = Jockey(jockey_id=jockey_id)
@@ -298,15 +381,7 @@ def _upsert_jockey_results(session, jockey_id: str, name: str | None, results: l
 
 
 def _upsert_trainer_results(session, trainer_id: str, name: str | None, results: list[dict]) -> None:
-    session.query(TrainerResult).filter(TrainerResult.trainer_id == trainer_id).delete()
-    seen_keys: set[tuple[str | None, str | None]] = set()
-    for row in results:
-        key = (row.get("race_key"), row.get("horse_id"))
-        if key[0] is not None and key in seen_keys:
-            continue
-        seen_keys.add(key)
-        session.add(TrainerResult(trainer_id=trainer_id, **row))
-
+    _upsert_person_results(session, TrainerResult, "trainer_id", trainer_id, results)
     trainer = session.get(Trainer, trainer_id)
     if trainer is None:
         trainer = Trainer(trainer_id=trainer_id)
@@ -324,100 +399,83 @@ def _upsert_trainer_results(session, trainer_id: str, name: str | None, results:
     trainer.results_fetched_at = now_jst()
 
 
-def _jockey_ids_to_fetch(session, limit: int) -> list[str]:
-    stale_before = now_jst() - timedelta(days=settings.JOCKEY_RESULTS_REFRESH_DAYS)
-    rows = (
-        session.query(Entry.jockey_id)
-        .outerjoin(Jockey, Jockey.jockey_id == Entry.jockey_id)
-        .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
-        .filter(
-            (Jockey.jockey_id.is_(None))
-            | (Jockey.results_fetched_at < stale_before)
-            | (Jockey.name.is_(None))
-            | (Jockey.name == "")
-        )
-        .distinct()
-        .limit(limit)
-        .all()
-    )
-    return [row[0] for row in rows]
+def _update_person_results_by_race(
+    kind: str, id_attr: str, person_type: str, model, upsert_fn, max_races: int
+) -> int:
+    """races 起点で、未収集レースの騎手/調教師について「当年＋前年」の成績を集める。
 
-
-def _trainer_ids_to_fetch(session, limit: int) -> list[str]:
-    stale_before = now_jst() - timedelta(days=settings.TRAINER_RESULTS_REFRESH_DAYS)
-    rows = (
-        session.query(Entry.trainer_id)
-        .outerjoin(Trainer, Trainer.trainer_id == Entry.trainer_id)
-        .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
-        .filter(
-            (Trainer.trainer_id.is_(None))
-            | (Trainer.results_fetched_at < stale_before)
-            | (Trainer.name.is_(None))
-            | (Trainer.name == "")
-        )
-        .distinct()
-        .limit(limit)
-        .all()
-    )
-    return [row[0] for row in rows]
-
-
-def _update_jockey_results(limit: int) -> int:
-    if limit <= 0:
+    エンティティは多レースに跨るため、同一 (id, 年ウィンドウ) はこのrun内で1回のみ取得。
+    既存 race_key を渡して scraper 側で既知到達時に打ち切る(再ダウンロード回避)。
+    """
+    if max_races <= 0:
         return 0
     session = get_session()
     try:
-        jockey_ids = _jockey_ids_to_fetch(session, limit)
+        races = _races_needing_collection(session, kind, max_races)
+        race_infos = [
+            (
+                race.id,
+                race.race_date,
+                list(dict.fromkeys(getattr(e, id_attr) for e in race.entries if getattr(e, id_attr))),
+            )
+            for race in races
+        ]
     finally:
         session.close()
 
-    fetched = 0
-    for jockey_id in jockey_ids:
-        try:
-            data = scraper.fetch_jockey_results(jockey_id)
-        except Exception as exc:
-            logger.warning("failed to fetch jockey results jockey_id=%s: %s", jockey_id, exc)
-            continue
+    fetched_windows: set[tuple[str, tuple[int, int]]] = set()
+    processed = 0
+    for race_id, race_date, entity_ids in race_infos:
+        years = _target_years(race_date)
+        years_key = (years[0], years[-1])
+        for entity_id in entity_ids:
+            if (entity_id, years_key) in fetched_windows:
+                continue
+            fetched_windows.add((entity_id, years_key))
+            session = get_session()
+            try:
+                known = {
+                    key
+                    for (key,) in session.query(model.race_key)
+                    .filter(getattr(model, id_attr) == entity_id, model.race_key.isnot(None))
+                    .all()
+                }
+            finally:
+                session.close()
+            try:
+                data = scraper.fetch_person_results(person_type, entity_id, years, known)
+            except Exception as exc:
+                logger.warning("failed to fetch %s results id=%s: %s", person_type, entity_id, exc)
+                continue
+            session = get_session()
+            try:
+                upsert_fn(session, entity_id, data["name"], data["results"])
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("failed to upsert %s results id=%s", person_type, entity_id)
+            finally:
+                session.close()
         session = get_session()
         try:
-            _upsert_jockey_results(session, jockey_id, data["name"], data["results"])
+            _mark_race_collected(session, race_id, kind)
             session.commit()
-            fetched += 1
-        except Exception:
-            session.rollback()
-            logger.exception("failed to upsert jockey results jockey_id=%s", jockey_id)
         finally:
             session.close()
-    return fetched
+        processed += 1
+    return processed
 
 
-def _update_trainer_results(limit: int) -> int:
-    if limit <= 0:
-        return 0
-    session = get_session()
-    try:
-        trainer_ids = _trainer_ids_to_fetch(session, limit)
-    finally:
-        session.close()
+def _update_jockey_results(max_races: int) -> int:
+    return _update_person_results_by_race(
+        KIND_JOCKEY, "jockey_id", "jockey", JockeyResult, _upsert_jockey_results, max_races
+    )
 
-    fetched = 0
-    for trainer_id in trainer_ids:
-        try:
-            data = scraper.fetch_trainer_results(trainer_id)
-        except Exception as exc:
-            logger.warning("failed to fetch trainer results trainer_id=%s: %s", trainer_id, exc)
-            continue
-        session = get_session()
-        try:
-            _upsert_trainer_results(session, trainer_id, data["name"], data["results"])
-            session.commit()
-            fetched += 1
-        except Exception:
-            session.rollback()
-            logger.exception("failed to upsert trainer results trainer_id=%s", trainer_id)
-        finally:
-            session.close()
-    return fetched
+
+def _update_trainer_results(max_races: int) -> int:
+    return _update_person_results_by_race(
+        KIND_TRAINER, "trainer_id", "trainer", TrainerResult, _upsert_trainer_results, max_races
+    )
 
 
 def _run_collect(params: dict) -> str:
@@ -437,39 +495,32 @@ def _run_collect(params: dict) -> str:
     )
 
 
-def _run_collect_horses(params: dict) -> str:
-    """馬の過去成績だけをまとめて収集する手動ジョブ。
-
-    レース収集やバックフィルでは馬過去成績を取得しないため、このジョブでまとめて収集する。
-    1回の上限はparamsのlimit、無ければ既定の5倍。
-    """
-    default_limit = settings.HORSE_RESULTS_PER_RUN * 5
+def _collect_races_limit(params: dict) -> int:
+    """1回の収集で処理する未収集レース数の上限(params.limit 優先、既定は設定値)。"""
+    default_limit = settings.RESULTS_RACES_PER_RUN
     try:
-        limit = int(params.get("limit", default_limit)) if params else default_limit
+        return int(params.get("limit", default_limit)) if params else default_limit
     except (TypeError, ValueError):
-        limit = default_limit
-    fetched = _update_horse_results(limit)
-    return f"馬の過去成績を{fetched}頭分収集しました(上限{limit}頭)"
+        return default_limit
+
+
+def _run_collect_horses(params: dict) -> str:
+    """未収集レースの出走馬について、過去成績と5代血統をまとめて収集する手動ジョブ。"""
+    limit = _collect_races_limit(params)
+    processed = _update_horse_results(limit)
+    return f"馬の過去成績・血統を{processed}レース分収集しました(上限{limit}レース)"
 
 
 def _run_collect_jockeys(params: dict) -> str:
-    default_limit = settings.JOCKEY_RESULTS_PER_RUN * 5
-    try:
-        limit = int(params.get("limit", default_limit)) if params else default_limit
-    except (TypeError, ValueError):
-        limit = default_limit
-    fetched = _update_jockey_results(limit)
-    return f"騎手の過去戦績を{fetched}人分収集しました(上限{limit}人)"
+    limit = _collect_races_limit(params)
+    processed = _update_jockey_results(limit)
+    return f"騎手の過去戦績を{processed}レース分収集しました(上限{limit}レース)"
 
 
 def _run_collect_trainers(params: dict) -> str:
-    default_limit = settings.TRAINER_RESULTS_PER_RUN * 5
-    try:
-        limit = int(params.get("limit", default_limit)) if params else default_limit
-    except (TypeError, ValueError):
-        limit = default_limit
-    fetched = _update_trainer_results(limit)
-    return f"調教師の過去戦績を{fetched}人分収集しました(上限{limit}人)"
+    limit = _collect_races_limit(params)
+    processed = _update_trainer_results(limit)
+    return f"調教師の過去戦績を{processed}レース分収集しました(上限{limit}レース)"
 
 
 def _run_backfill(params: dict) -> str:
