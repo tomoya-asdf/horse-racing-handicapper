@@ -135,6 +135,10 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 成績収集の進捗フラグです。`race_id`・`kind`(`horse_results` / `jockey_results` / `trainer_results`)・`collected_at` を持ち、`(race_id, kind)` が一意。`races` への列追加は `create_all` が反映しないため、別テーブルで持ちます。
 
+### person_results_coverage
+
+騎手/調教師の成績収集カバレッジです。`person_type`(`jockey` / `trainer`)・`person_id`・網羅済みの最古レース日 `oldest_date`・取得時刻 `fetched_at` を持ち、`(person_type, person_id)` が一意。必要期間が既に取得済みかを判定し、バッチをまたいだ再取得を避けるために使います。
+
 ### predictions
 
 出走馬ごとの予測スコアです。`entry_id` と `model_version` の組み合わせで管理します。同じモデルバージョンの予測が既にある場合は重複保存しません。
@@ -267,8 +271,9 @@ Web UI で変更できる主な設定:
 
 馬・騎手・調教師の過去戦績は **races(レース一覧)を起点**に収集します。`RaceCollectionStatus` に種別(`horse_results` / `jockey_results` / `trainer_results`)ごとの取得済みフラグを持ち、未収集のレースを新しい順に最大 `RESULTS_RACES_PER_RUN` 件処理し、そのレースの全参加者の成績を取り切ったらフラグを立てます。各成績は**追記のみ**(既存 `(race_key, horse_id)` はスキップ)で保存し、履歴を消さずに積み増します。
 
-- **馬**: `https://db.netkeiba.com/horse/result/{horse_id}/`(全キャリアが1ページ)。同一馬は1回取れば十分なので run 内で重複取得しません。
-- **騎手 / 調教師**: `/?pid={type}_select&id={id}&year=YYYY&mode={r1|r2|r3|r4}&page=N`。recent ページは直近約20走のみで不足するため、着順区分 r1〜r4(1〜3着・着外)を合算し `&page=N` でページングして年内全件を取得します。対象年はそのレースの開催年と前年(`PERSON_RESULTS_YEARS_BACK`、既定1=当年＋前年)。エンティティの既存 `race_key` 集合を渡し、既知レースに達した時点で打ち切ります(漸進収集=再ダウンロード回避)。同一(エンティティ, 年ウィンドウ)は run 内で1回のみ取得します。
+- **馬**: `https://db.netkeiba.com/horse/result/{horse_id}/`(全キャリアが1ページ)。同一馬は run 内で重複取得せず、過去成績が `HORSE_RESULTS_REFRESH_DAYS` 日以内に取得済みかつ血統取得済みの馬はスキップします。
+- **騎手 / 調教師**: `https://db.netkeiba.com/{jockey|trainer}/race.html?id={id}&page=N` を新しい順にページングします。このページは全着順を1ページ20行・降順の1本のストリームで返し、距離・馬場・馬名・タイム等の列も揃います(着順区分での分割が不要)。各レースの開催年から下限日 `since_date`(開催年と前年 = `PERSON_RESULTS_YEARS_BACK`、既定1)を決め、`since_date` より古いレースに達したらページングを打ち切ります。
+  - **再取得の回避**: 騎手/調教師ごとに `PersonResultsCoverage`(網羅済みの最古レース日 `oldest_date` と取得時刻 `fetched_at`)を記録します。必要な `since_date` を `oldest_date` が覆っていて、かつ `fetched_at` が `{JOCKEY|TRAINER}_RESULTS_REFRESH_DAYS` 日以内なら、その人物の取得を**丸ごとスキップ**します(1リクエストも投げない)。より古い `since_date` が必要なレースに当たったときだけ、降順ストリームを遡って差分を追記します。これによりバッチをまたいだ無駄な再取得を排除します。
 
 ### 血統(5代血統表)
 

@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -15,6 +15,7 @@ from src.common.models import (
     HorseResult,
     Jockey,
     JockeyResult,
+    PersonResultsCoverage,
     Race,
     RaceCollectionStatus,
     Trainer,
@@ -163,11 +164,14 @@ def _update_finished_results() -> int:
 
 # ---- races 起点の収集ドライバ共通部 ----
 
-def _target_years(race_date) -> list[int]:
-    """そのレースの開催年と、設定分だけ遡った年のリスト([年, 年-1, …])。"""
+def _person_since_date(race_date) -> date:
+    """そのレースについて騎手/調教師成績を遡る下限日(その年の1/1から設定年数分前)。
+
+    例: race_date=2026年・PERSON_RESULTS_YEARS_BACK=1 なら 2025-01-01(当年＋前年)。
+    """
     year = race_date.year if race_date is not None else now_jst().year
     back = max(0, settings.PERSON_RESULTS_YEARS_BACK)
-    return [year - offset for offset in range(back + 1)]
+    return date(year - back, 1, 1)
 
 
 def _races_needing_collection(session, kind: str, limit: int):
@@ -270,6 +274,23 @@ def _horses_with_pedigree(session, horse_ids: list[str]) -> set[str]:
     }
 
 
+def _fresh_horses(session, horse_ids: list[str], refresh_days: int) -> set[str]:
+    """``horse_ids`` のうち、過去成績を ``refresh_days`` 日以内に取得済みの馬IDを返す。"""
+    if not horse_ids:
+        return set()
+    cutoff = now_jst() - timedelta(days=refresh_days)
+    return {
+        row[0]
+        for row in session.query(Horse.horse_id)
+        .filter(
+            Horse.horse_id.in_(horse_ids),
+            Horse.results_fetched_at.isnot(None),
+            Horse.results_fetched_at >= cutoff,
+        )
+        .all()
+    }
+
+
 def _fetch_and_store_one_horse(horse_id: str, need_pedigree: bool) -> bool:
     """1頭の過去成績(と未取得なら5代血統)を取得・保存する。成功で True。"""
     try:
@@ -320,12 +341,16 @@ def _update_horse_results(max_races: int) -> int:
         session = get_session()
         try:
             ped_known = _horses_with_pedigree(session, unique_ids)
+            fresh = _fresh_horses(session, unique_ids, settings.HORSE_RESULTS_REFRESH_DAYS)
         finally:
             session.close()
         for horse_id in unique_ids:
             if horse_id in fetched_horses:
                 continue
             fetched_horses.add(horse_id)
+            # 過去成績が鮮度内かつ血統も取得済みなら、ネットワークアクセスせずスキップ
+            if horse_id in fresh and horse_id in ped_known:
+                continue
             _fetch_and_store_one_horse(horse_id, horse_id not in ped_known)
         session = get_session()
         try:
@@ -399,13 +424,69 @@ def _upsert_trainer_results(session, trainer_id: str, name: str | None, results:
     trainer.results_fetched_at = now_jst()
 
 
+def _collect_one_person(
+    person_type: str, entity_id: str, since_date: date, upsert_fn, refresh_days: int
+) -> None:
+    """1人(騎手/調教師)の成績を、必要なら race.html から取得して追記する。
+
+    カバレッジ記録(PersonResultsCoverage)を見て、必要期間(since_date 以降)を
+    既に網羅済みかつ鮮度内ならネットワークアクセスせずスキップする。
+    """
+    session = get_session()
+    try:
+        cov = (
+            session.query(PersonResultsCoverage)
+            .filter_by(person_type=person_type, person_id=entity_id)
+            .one_or_none()
+        )
+        covered = cov is not None and cov.oldest_date is not None and cov.oldest_date <= since_date
+        fresh = (
+            cov is not None
+            and cov.fetched_at is not None
+            and (now_jst() - cov.fetched_at).days < refresh_days
+        )
+        if covered and fresh:
+            return  # 取得済み・鮮度内 → スキップ(1リクエストも投げない)
+    finally:
+        session.close()
+
+    try:
+        data = scraper.fetch_person_results(person_type, entity_id, since_date)
+    except Exception as exc:
+        logger.warning("failed to fetch %s results id=%s: %s", person_type, entity_id, exc)
+        return
+
+    session = get_session()
+    try:
+        upsert_fn(session, entity_id, data["name"], data["results"])
+        cov = (
+            session.query(PersonResultsCoverage)
+            .filter_by(person_type=person_type, person_id=entity_id)
+            .one_or_none()
+        )
+        if cov is None:
+            cov = PersonResultsCoverage(person_type=person_type, person_id=entity_id)
+            session.add(cov)
+        cov.oldest_date = (
+            since_date if cov.oldest_date is None else min(cov.oldest_date, since_date)
+        )
+        cov.fetched_at = now_jst()
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("failed to upsert %s results id=%s", person_type, entity_id)
+    finally:
+        session.close()
+
+
 def _update_person_results_by_race(
-    kind: str, id_attr: str, person_type: str, model, upsert_fn, max_races: int
+    kind: str, id_attr: str, person_type: str, upsert_fn, refresh_days: int, max_races: int
 ) -> int:
     """races 起点で、未収集レースの騎手/調教師について「当年＋前年」の成績を集める。
 
-    エンティティは多レースに跨るため、同一 (id, 年ウィンドウ) はこのrun内で1回のみ取得。
-    既存 race_key を渡して scraper 側で既知到達時に打ち切る(再ダウンロード回避)。
+    各レースの開催年から下限日(since_date)を決め、出走している騎手/調教師ごとに
+    race.html を新しい順に取得する。エンティティは多レースに跨るため、同一エンティティは
+    このrun内で1回のみ取得し、カバレッジ記録で過去ランの再取得も避ける。
     """
     if max_races <= 0:
         return 0
@@ -423,39 +504,17 @@ def _update_person_results_by_race(
     finally:
         session.close()
 
-    fetched_windows: set[tuple[str, tuple[int, int]]] = set()
+    # 同一ラン内で同じ(エンティティ, 下限日)を二度取得しない。下限日まで含めるのは、
+    # 古いレースほど古い期間が必要で、新しいレースの取得だけでは網羅できないため。
+    fetched: set[tuple[str, date]] = set()
     processed = 0
     for race_id, race_date, entity_ids in race_infos:
-        years = _target_years(race_date)
-        years_key = (years[0], years[-1])
+        since_date = _person_since_date(race_date)
         for entity_id in entity_ids:
-            if (entity_id, years_key) in fetched_windows:
+            if (entity_id, since_date) in fetched:
                 continue
-            fetched_windows.add((entity_id, years_key))
-            session = get_session()
-            try:
-                known = {
-                    key
-                    for (key,) in session.query(model.race_key)
-                    .filter(getattr(model, id_attr) == entity_id, model.race_key.isnot(None))
-                    .all()
-                }
-            finally:
-                session.close()
-            try:
-                data = scraper.fetch_person_results(person_type, entity_id, years, known)
-            except Exception as exc:
-                logger.warning("failed to fetch %s results id=%s: %s", person_type, entity_id, exc)
-                continue
-            session = get_session()
-            try:
-                upsert_fn(session, entity_id, data["name"], data["results"])
-                session.commit()
-            except Exception:
-                session.rollback()
-                logger.exception("failed to upsert %s results id=%s", person_type, entity_id)
-            finally:
-                session.close()
+            fetched.add((entity_id, since_date))
+            _collect_one_person(person_type, entity_id, since_date, upsert_fn, refresh_days)
         session = get_session()
         try:
             _mark_race_collected(session, race_id, kind)
@@ -468,13 +527,23 @@ def _update_person_results_by_race(
 
 def _update_jockey_results(max_races: int) -> int:
     return _update_person_results_by_race(
-        KIND_JOCKEY, "jockey_id", "jockey", JockeyResult, _upsert_jockey_results, max_races
+        KIND_JOCKEY,
+        "jockey_id",
+        "jockey",
+        _upsert_jockey_results,
+        settings.JOCKEY_RESULTS_REFRESH_DAYS,
+        max_races,
     )
 
 
 def _update_trainer_results(max_races: int) -> int:
     return _update_person_results_by_race(
-        KIND_TRAINER, "trainer_id", "trainer", TrainerResult, _upsert_trainer_results, max_races
+        KIND_TRAINER,
+        "trainer_id",
+        "trainer",
+        _upsert_trainer_results,
+        settings.TRAINER_RESULTS_REFRESH_DAYS,
+        max_races,
     )
 
 

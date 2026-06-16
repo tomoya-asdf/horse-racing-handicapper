@@ -912,6 +912,15 @@ def _parse_distance(text: str) -> tuple[str | None, int | None]:
     return _TRACK_TYPE_MAP.get(match.group(1)), int(match.group(2))
 
 
+def _distance_from_cells(cells) -> tuple[str | None, int | None]:
+    """行のセル群から「芝/ダ/障+距離」のセルを内容で探して馬場種別と距離を返す。"""
+    for cell in cells:
+        text = cell.get_text(strip=True).replace(" ", "")
+        if _DISTANCE_RE.match(text):
+            return _parse_distance(text)
+    return None, None
+
+
 def _parse_time_seconds(text: str) -> float | None:
     """走破タイム('1:33.4'や'33.4')を秒に換算する。"""
     text = text.strip()
@@ -1091,7 +1100,9 @@ def _parse_person_result_row(headers: list[str], cells, person_type: str) -> dic
         if link is not None:
             horse_id = _parse_horse_id(link.get("href"))
 
-    track_type, distance = _parse_distance(_cell_text(headers, cells, "距離"))
+    # 距離は内容で探す。trainer/race.html はヘッダの「水分量/距離」順がデータ列と食い違う
+    # (netkeiba側の不整合)ため、ヘッダ位置ではなく「芝/ダ/障+距離」のセルを走査して拾う。
+    track_type, distance = _distance_from_cells(cells)
     finish_text = _cell_text(headers, cells, "着順")
     row = {
         "race_key": race_key,
@@ -1137,69 +1148,60 @@ def _parse_person_result_row(headers: list[str], cells, person_type: str) -> dic
     return row
 
 
-# 着順区分モード。r1〜r4(1着/2着/3着/着外)の合算で年内の全騎乗/全管理馬を網羅する
-# (空 mode は一覧表を返さない)。netkeiba の per-race 一覧は1ページ20行・&page=N でページング。
-_PERSON_RESULT_MODES = ("r1", "r2", "r3", "r4")
 _PERSON_RESULTS_PAGE_SIZE = 20
-_MAX_RESULT_PAGES = 60  # 安全上限(無限ループ防止)
+_MAX_RESULT_PAGES = 200  # 安全上限(無限ループ防止)。1頁20行=最大4000走まで遡れる
 
 
 def fetch_person_results(
     person_type: str,
     person_id: str,
-    years: list[int],
-    known_race_keys: set[str] | None = None,
+    since_date: date | None = None,
 ) -> dict:
-    """騎手/調教師の成績を、指定年×着順区分(r1〜r4)で取得する。
+    """騎手/調教師の per-race 成績を ``/{type}/race.html`` から新しい順に取得する。
 
-    全成績の per-race 一覧は ``/?pid={type}_select&id=&year=&mode=`` にあり、recent ページ
-    (直近約20走のみ)では足りないためこちらを使う。``years`` の各年について mode r1〜r4 を
-    ``&page=N`` でページングし、合算して年内の全件を集める。``known_race_keys`` に含まれる
-    既知レースだけのページに達したら、その (year, mode) を打ち切る(漸進収集=既存分の
-    再ダウンロードを避ける。一覧は新しい順のため、既知に達した以降は全て既知)。
+    ``/{type}/race.html?id=&page=N`` は全着順を1ページ20行・降順で1本のストリームとして
+    返す(着順区分での分割が不要で、距離・馬場・馬名・タイム等の列も揃う)。``since_date``
+    を指定すると、その日付より古いレースに達した時点でページングを打ち切る(必要な期間
+    だけを取得し、過去への遡りすぎを防ぐ)。重複排除は呼び出し側(DB上の既存行)で行う。
     """
-    known = known_race_keys or set()
     name: str | None = None
     rows: list[dict] = []
     seen: set[tuple[str | None, str | None]] = set()
-    for year in years:
-        for mode in _PERSON_RESULT_MODES:
-            for page in range(1, _MAX_RESULT_PAGES + 1):
-                url = (
-                    f"{DB_BASE_URL}/?pid={person_type}_select&id={person_id}"
-                    f"&year={year}&mode={mode}&page={page}"
-                )
-                response = _get(url)
-                soup = BeautifulSoup(response.text, "html.parser")
-                if name is None:
-                    name = _parse_profile_name(soup)
-                table = _find_person_results_table(soup)
-                if table is None:
-                    break
-                header_row = table.find("tr")
-                headers = [c.get_text(strip=True) for c in header_row.find_all(["th", "td"])]
-                page_rows = [
-                    _parse_person_result_row(headers, cells, person_type)
-                    for cells in (tr.find_all("td") for tr in table.find_all("tr")[1:])
-                    if cells
-                ]
-                if not page_rows:
-                    break
-                new_in_page = 0
-                for row in page_rows:
-                    key = (row.get("race_key"), row.get("horse_id"))
-                    if key[0] is not None and key in seen:
-                        continue
-                    seen.add(key)
-                    rows.append(row)
-                    if row.get("race_key") not in known:
-                        new_in_page += 1
-                # 既知レースのみのページに達したら、この(year,mode)はこれ以上古い分も既知
-                if known and new_in_page == 0:
-                    break
-                # 1ページ未満(=最終ページ)なら次ページ無し
-                if len(page_rows) < _PERSON_RESULTS_PAGE_SIZE:
-                    break
+    for page in range(1, _MAX_RESULT_PAGES + 1):
+        url = f"{DB_BASE_URL}/{person_type}/race.html?id={person_id}&page={page}"
+        response = _get(url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        if name is None:
+            name = _parse_profile_name(soup)
+        table = _find_person_results_table(soup)
+        if table is None:
+            break
+        header_row = table.find("tr")
+        headers = [c.get_text(strip=True) for c in header_row.find_all(["th", "td"])]
+        page_rows = [
+            _parse_person_result_row(headers, cells, person_type)
+            for cells in (tr.find_all("td") for tr in table.find_all("tr")[1:])
+            if cells
+        ]
+        if not page_rows:
+            break
+        reached_old = False
+        for row in page_rows:
+            race_date = row.get("race_date")
+            if since_date is not None and race_date is not None and race_date < since_date:
+                reached_old = True
+                continue
+            key = (row.get("race_key"), row.get("horse_id"))
+            if key[0] is not None and key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+        # since_date より古い行が出た = これ以降のページはさらに古いので打ち切る
+        if reached_old:
+            break
+        # 1ページ未満(=最終ページ)なら次ページ無し
+        if len(page_rows) < _PERSON_RESULTS_PAGE_SIZE:
+            break
     return {"id": person_id, "name": name, "results": rows}
 
 

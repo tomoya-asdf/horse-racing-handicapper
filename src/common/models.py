@@ -355,6 +355,28 @@ class RaceCollectionStatus(Base):
     collected_at = Column(DateTime, default=now_jst)
 
 
+class PersonResultsCoverage(Base):
+    """騎手/調教師の成績収集カバレッジ。再取得を避けるための進捗記録。
+
+    ``oldest_date`` はその人物について「これより新しい側は網羅済み」と言える最古の
+    レース日。``fetched_at`` が ``*_RESULTS_REFRESH_DAYS`` 以内かつ必要な期間を
+    ``oldest_date`` が覆っていれば、その人物の取得を丸ごとスキップできる
+    (race.html を1リクエストも投げない)。``races`` 等への列追加は create_all が
+    反映しないため、別テーブルで持つ。
+    """
+
+    __tablename__ = "person_results_coverage"
+    __table_args__ = (
+        UniqueConstraint("person_type", "person_id", name="uq_person_results_coverage"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    person_type = Column(String(10), nullable=False)  # jockey / trainer
+    person_id = Column(String, nullable=False, index=True)
+    oldest_date = Column(Date)
+    fetched_at = Column(DateTime, default=now_jst)
+
+
 class HorsePedigree(Base):
     """馬の血統(最大5代血統表)。1行=1先祖。
 
