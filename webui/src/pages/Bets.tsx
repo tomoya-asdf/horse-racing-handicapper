@@ -38,7 +38,7 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
             シミュレーション
           </button>
           <button
-            className={mode === "prod" ? "active" : ""}
+            className={`mode-prod ${mode === "prod" ? "active" : ""}`}
             onClick={() => setMode("prod")}
             style={{ display: canViewProd ? undefined : "none" }}
           >
