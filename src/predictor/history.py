@@ -16,49 +16,15 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from src.common.feature_catalog import (  # noqa: F401  再エクスポート(features.py 等が参照)
+    HISTORY_FEATURES,
+    JOCKEY_HISTORY_FEATURES,
+    TRAINER_HISTORY_FEATURES,
+)
 from src.common.models import Horse, HorseResult, JockeyResult, TrainerResult
 
 # 同距離とみなす許容差(m)。1600m戦なら1400〜1800mの実績を「同距離帯」として集計する
 SAME_DISTANCE_TOLERANCE = 200
-
-# build_features が受け取る履歴特徴量の列名(全て数値、未該当はNaN=欠損としてLightGBMに渡す)
-HISTORY_FEATURES = [
-    "career_starts",  # 出走回数(完走数)
-    "win_rate",  # 勝率
-    "place_rate",  # 複勝率(3着内率)
-    "avg_finish_recent3",  # 直近3走の平均着順
-    "avg_finish_recent5",  # 直近5走の平均着順
-    "best_last3f_recent5",  # 直近5走の上がり3F最速
-    "avg_last3f_recent5",  # 直近5走の上がり3F平均
-    "days_since_last",  # 前走からの間隔(日)
-    "distance_change",  # 今回距離 - 前走距離
-    "same_dist_starts",  # 同距離帯の出走数
-    "same_dist_avg_finish",  # 同距離帯の平均着順
-    "same_surface_starts",  # 同馬場種別(芝/ダ)の出走数
-    "same_surface_avg_finish",  # 同馬場種別の平均着順
-]
-
-JOCKEY_HISTORY_FEATURES = [
-    "jockey_starts",
-    "jockey_win_rate",
-    "jockey_place_rate",
-    "jockey_avg_finish_recent10",
-    "jockey_same_dist_starts",
-    "jockey_same_dist_win_rate",
-    "jockey_same_surface_starts",
-    "jockey_same_surface_win_rate",
-]
-
-TRAINER_HISTORY_FEATURES = [
-    "trainer_starts",
-    "trainer_win_rate",
-    "trainer_place_rate",
-    "trainer_avg_finish_recent10",
-    "trainer_same_dist_starts",
-    "trainer_same_dist_win_rate",
-    "trainer_same_surface_starts",
-    "trainer_same_surface_win_rate",
-]
 
 
 def season_features(race_date: date | None) -> tuple[float, float]:
@@ -88,6 +54,7 @@ def load_horse_history(session) -> dict[str, pd.DataFrame]:
             HorseResult.finish_position,
             HorseResult.distance,
             HorseResult.track_type,
+            HorseResult.going,
             HorseResult.last_3f,
         )
         .filter(HorseResult.horse_id.isnot(None))
@@ -98,7 +65,15 @@ def load_horse_history(session) -> dict[str, pd.DataFrame]:
 
     df = pd.DataFrame(
         rows,
-        columns=["horse_id", "race_date", "finish_position", "distance", "track_type", "last_3f"],
+        columns=[
+            "horse_id",
+            "race_date",
+            "finish_position",
+            "distance",
+            "track_type",
+            "going",
+            "last_3f",
+        ],
     )
     df["race_date"] = pd.to_datetime(df["race_date"], errors="coerce")
 
@@ -123,6 +98,7 @@ def _load_person_history(session, model, id_column: str) -> dict[str, pd.DataFra
             model.finish_position,
             model.distance,
             model.track_type,
+            model.going,
         )
         .filter(person_id.isnot(None))
         .all()
@@ -132,7 +108,7 @@ def _load_person_history(session, model, id_column: str) -> dict[str, pd.DataFra
 
     df = pd.DataFrame(
         rows,
-        columns=["person_id", "race_date", "finish_position", "distance", "track_type"],
+        columns=["person_id", "race_date", "finish_position", "distance", "track_type", "going"],
     )
     df["race_date"] = pd.to_datetime(df["race_date"], errors="coerce")
     history: dict[str, pd.DataFrame] = {}
@@ -154,6 +130,7 @@ def _empty_features() -> dict[str, float]:
     feats["career_starts"] = 0
     feats["same_dist_starts"] = 0
     feats["same_surface_starts"] = 0
+    feats["same_going_starts"] = 0
     return feats
 
 
@@ -167,6 +144,8 @@ def _empty_person_features(prefix: str) -> dict[str, float]:
         f"{prefix}_same_dist_win_rate": np.nan,
         f"{prefix}_same_surface_starts": 0,
         f"{prefix}_same_surface_win_rate": np.nan,
+        f"{prefix}_same_going_starts": 0,
+        f"{prefix}_same_going_win_rate": np.nan,
     }
     return feats
 
@@ -177,6 +156,7 @@ def compute_person_history_features(
     race_date: date | None,
     distance: int | None,
     track_type: str | None,
+    going: str | None = None,
 ) -> dict[str, float]:
     feats = _empty_person_features(prefix)
     if past is None or race_date is None:
@@ -216,6 +196,14 @@ def compute_person_history_features(
                 (same_surface["finish_position"].astype(float) == 1).mean()
             )
 
+    if going is not None and "going" in finished.columns:
+        same_going = finished[finished["going"] == going]
+        feats[f"{prefix}_same_going_starts"] = int(len(same_going))
+        if len(same_going) > 0:
+            feats[f"{prefix}_same_going_win_rate"] = float(
+                (same_going["finish_position"].astype(float) == 1).mean()
+            )
+
     return feats
 
 
@@ -224,6 +212,7 @@ def compute_history_features(
     race_date: date | None,
     distance: int | None,
     track_type: str | None,
+    going: str | None = None,
 ) -> dict[str, float]:
     """1頭分の履歴特徴量を返す。``past`` はその馬の全過去成績(日付フィルタ前)。"""
     feats = _empty_features()
@@ -245,6 +234,10 @@ def compute_history_features(
         feats["place_rate"] = float((finish <= 3).mean())
         feats["avg_finish_recent3"] = float(finish.head(3).mean())
         feats["avg_finish_recent5"] = float(finish.head(5).mean())
+        # 直近10走(成績ベース。古い実績の影響を抑えた近走の調子)
+        recent10 = finish.head(10)
+        feats["win_rate_recent10"] = float((recent10 == 1).mean())
+        feats["place_rate_recent10"] = float((recent10 <= 3).mean())
 
     last3f = past.head(5)["last_3f"].dropna().astype(float)
     if not last3f.empty:
@@ -273,6 +266,14 @@ def compute_history_features(
                 same_surface["finish_position"].astype(float).mean()
             )
 
+    if going is not None and starts > 0 and "going" in finished.columns:
+        same_going = finished[finished["going"] == going]
+        feats["same_going_starts"] = int(len(same_going))
+        if len(same_going) > 0:
+            feats["same_going_place_rate"] = float(
+                (same_going["finish_position"].astype(float) <= 3).mean()
+            )
+
     return feats
 
 
@@ -295,6 +296,10 @@ def build_entries_frame(
     trainer_history = trainer_history or {}
     # 季節(sin/cos)はレース単位で同じ値。出走馬ごとに再計算せず一度だけ求める
     season_sin, season_cos = season_features(race.race_date)
+    field_size = len(entries)
+    # 相対特徴量のためレース内平均を一度だけ求める(欠損は除いて平均、全欠損なら NaN)
+    weight_mean = _mean_or_nan([e.weight for e in entries])
+    horse_weight_mean = _mean_or_nan([e.horse_weight for e in entries])
     rows = []
     index = []
     for entry in entries:
@@ -303,6 +308,7 @@ def build_entries_frame(
             race.race_date,
             race.distance,
             race.track_type,
+            race.going,
         )
         jockey_feats = compute_person_history_features(
             jockey_history.get(entry.jockey_id) if entry.jockey_id else None,
@@ -310,6 +316,7 @@ def build_entries_frame(
             race.race_date,
             race.distance,
             race.track_type,
+            race.going,
         )
         trainer_feats = compute_person_history_features(
             trainer_history.get(entry.trainer_id) if entry.trainer_id else None,
@@ -317,6 +324,7 @@ def build_entries_frame(
             race.race_date,
             race.distance,
             race.track_type,
+            race.going,
         )
         rows.append(
             {
@@ -332,6 +340,22 @@ def build_entries_frame(
                 "distance": race.distance,
                 "season_sin": season_sin,
                 "season_cos": season_cos,
+                # 枠順・相対値(レース内での相対位置)
+                "draw_ratio": (
+                    float(entry.horse_number) / field_size
+                    if entry.horse_number is not None and field_size > 0
+                    else np.nan
+                ),
+                "weight_rel": _rel(entry.weight, weight_mean),
+                "horse_weight_rel": _rel(entry.horse_weight, horse_weight_mean),
+                # レース条件(レース単位で同じ値)
+                "race_number": race.race_number,
+                "track_type": race.track_type,
+                "going": race.going,
+                "weather": race.weather,
+                "direction": race.direction,
+                "race_class": race.race_class,
+                "venue": race.venue,
                 **feats,
                 **jockey_feats,
                 **trainer_feats,
@@ -339,3 +363,15 @@ def build_entries_frame(
         )
         index.append(entry.id)
     return pd.DataFrame(rows, index=index)
+
+
+def _mean_or_nan(values: list) -> float:
+    nums = [float(v) for v in values if v is not None and not pd.isna(v)]
+    return float(sum(nums) / len(nums)) if nums else float("nan")
+
+
+def _rel(value, mean: float) -> float:
+    """value − レース平均。value 欠損または平均が NaN のときは NaN。"""
+    if value is None or pd.isna(value) or pd.isna(mean):
+        return float("nan")
+    return float(value) - float(mean)

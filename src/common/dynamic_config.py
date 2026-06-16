@@ -4,13 +4,28 @@
 without requiring a container restart.
 """
 
+import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from src.common.config import settings
 from src.common.db import get_session
-from src.common.models import AppSetting, Bet, BetStatus, JobRun, JobTrigger, Race
+from src.common.feature_catalog import (
+    DEFAULT_ENABLED_FEATURES,
+    feature_catalog,
+    normalize_enabled_features,
+    resolve_features,
+)
+from src.common.models import (
+    AppSetting,
+    Bet,
+    BetStatus,
+    JobRun,
+    JobTrigger,
+    ModelVersion,
+    Race,
+)
 from src.common.timeutils import now_jst
 
 logger = logging.getLogger(__name__)
@@ -22,6 +37,28 @@ class BettingConfig:
     amount: float
     score_threshold: float
     min_expected_value: float
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """WebUIから編集できる学習設定(特徴量の選択 + LightGBMのハイパーパラメータ)。"""
+
+    learning_rate: float
+    num_leaves: int
+    max_depth: int
+    min_child_samples: int
+    reg_alpha: float
+    reg_lambda: float
+    feature_fraction: float
+    bagging_fraction: float
+    max_boost_rounds: int
+    early_stopping_rounds: int
+    valid_fraction: float
+    min_races: int
+    enabled_features: tuple[str, ...]
+    # 学習に使うレースの期間("YYYY-MM-DD" or None=全期間)
+    train_start: str | None = None
+    train_end: str | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +179,44 @@ def _schedule_defaults() -> dict[str, object]:
     return defaults
 
 
+# 学習設定の既定値(LightGBMの既定 + これまでハードコードしていた train.py の定数)
+MODEL_SETTING_DEFAULTS: dict[str, object] = {
+    "model_learning_rate": 0.1,
+    "model_num_leaves": 31,
+    "model_max_depth": -1,
+    "model_min_child_samples": 20,
+    "model_reg_alpha": 0.0,
+    "model_reg_lambda": 0.0,
+    "model_feature_fraction": 1.0,
+    "model_bagging_fraction": 1.0,
+    "model_max_boost_rounds": 1000,
+    "model_early_stopping_rounds": 50,
+    "model_valid_fraction": 0.2,
+    "model_min_races": 20,
+    "model_enabled_features": ",".join(DEFAULT_ENABLED_FEATURES),
+    "model_train_start_date": "",
+    "model_train_end_date": "",
+}
+
+# 検証付きの整数キー / 小数キー(model_enabled_features は別扱い)
+_MODEL_INT_KEYS = {
+    "model_num_leaves",
+    "model_max_depth",
+    "model_min_child_samples",
+    "model_max_boost_rounds",
+    "model_early_stopping_rounds",
+    "model_min_races",
+}
+_MODEL_FLOAT_KEYS = {
+    "model_learning_rate",
+    "model_reg_alpha",
+    "model_reg_lambda",
+    "model_feature_fraction",
+    "model_bagging_fraction",
+    "model_valid_fraction",
+}
+
+
 def _env_defaults() -> dict[str, object]:
     defaults = {
         "betting_mode": settings.BETTING_MODE,
@@ -150,6 +225,7 @@ def _env_defaults() -> dict[str, object]:
         "bet_min_expected_value": settings.BET_MIN_EXPECTED_VALUE,
     }
     defaults.update(_schedule_defaults())
+    defaults.update(MODEL_SETTING_DEFAULTS)
     return defaults
 
 
@@ -217,11 +293,75 @@ def _weekdays_from_str(value: object) -> frozenset[int]:
     )
 
 
+def _parse_enabled_features(key: str, value: object) -> str:
+    """特徴量の選択を ``"horse_number,age,..."`` 形式の正規化文字列にする。
+
+    WebUIからは配列、app_settingsからはカンマ区切り文字列で渡る。既知の特徴量名のみを
+    FEATURE_COLUMNS の並び順で残す。空(全て無効)も許可し、その場合 load_model_config 側で
+    全特徴量にフォールバックする。
+    """
+    if isinstance(value, (list, tuple)):
+        raw = [str(part).strip() for part in value]
+    else:
+        raw = [part.strip() for part in str(value).split(",") if part.strip() != ""]
+    return ",".join(normalize_enabled_features(raw))
+
+
+def _parse_date_setting(key: str, value: object) -> str:
+    """学習期間の日付を "YYYY-MM-DD" に正規化する。空(=期間指定なし)も許可。"""
+    text = str(value or "").strip()
+    if text == "":
+        return ""
+    try:
+        date.fromisoformat(text)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} は YYYY-MM-DD 形式で指定してください: {value!r}")
+    return text
+
+
+def _parse_model_setting(key: str, value: object):
+    if key == "model_enabled_features":
+        return _parse_enabled_features(key, value)
+    if key in ("model_train_start_date", "model_train_end_date"):
+        return _parse_date_setting(key, value)
+
+    number = _parse_number(key, value)
+    if key in _MODEL_INT_KEYS:
+        ivalue = int(number)
+        if key == "model_max_depth":
+            if ivalue != -1 and ivalue < 1:
+                raise ValueError(f"{key} は -1(無制限)または1以上で指定してください: {value!r}")
+        elif key == "model_num_leaves":
+            if ivalue < 2:
+                raise ValueError(f"{key} は2以上で指定してください: {value!r}")
+        elif ivalue < 1:
+            raise ValueError(f"{key} は1以上で指定してください: {value!r}")
+        return ivalue
+
+    # 小数キー
+    if key == "model_learning_rate":
+        if not 0.0 < number <= 1.0:
+            raise ValueError(f"{key} は0より大きく1以下で指定してください: {value!r}")
+    elif key in ("model_feature_fraction", "model_bagging_fraction"):
+        if not 0.0 < number <= 1.0:
+            raise ValueError(f"{key} は0より大きく1以下で指定してください: {value!r}")
+    elif key == "model_valid_fraction":
+        if not 0.0 < number < 1.0:
+            raise ValueError(f"{key} は0より大きく1未満で指定してください: {value!r}")
+    elif key in ("model_reg_alpha", "model_reg_lambda"):
+        if number < 0:
+            raise ValueError(f"{key} は0以上で指定してください: {value!r}")
+    return float(number)
+
+
 def _parse(key: str, value: object):
     if key == "betting_mode":
         if value not in ("prod", "sim"):
             raise ValueError(f"betting_mode は 'prod' か 'sim' を指定してください: {value!r}")
         return value
+
+    if key.startswith("model_"):
+        return _parse_model_setting(key, value)
 
     if key.startswith("schedule_") and key.endswith("_enabled"):
         return _parse_bool(key, value)
@@ -291,6 +431,56 @@ def load_betting_config() -> BettingConfig:
         score_threshold=float(merged["bet_score_threshold"]),
         min_expected_value=float(merged["bet_min_expected_value"]),
     )
+
+
+def _enabled_features_from(value: object) -> list[str]:
+    return [part.strip() for part in str(value).split(",") if part.strip() != ""]
+
+
+def load_model_config() -> ModelConfig:
+    merged = _merged_settings()
+    enabled = _enabled_features_from(merged["model_enabled_features"])
+    return ModelConfig(
+        learning_rate=float(merged["model_learning_rate"]),
+        num_leaves=int(merged["model_num_leaves"]),
+        max_depth=int(merged["model_max_depth"]),
+        min_child_samples=int(merged["model_min_child_samples"]),
+        reg_alpha=float(merged["model_reg_alpha"]),
+        reg_lambda=float(merged["model_reg_lambda"]),
+        feature_fraction=float(merged["model_feature_fraction"]),
+        bagging_fraction=float(merged["model_bagging_fraction"]),
+        max_boost_rounds=int(merged["model_max_boost_rounds"]),
+        early_stopping_rounds=int(merged["model_early_stopping_rounds"]),
+        valid_fraction=float(merged["model_valid_fraction"]),
+        min_races=int(merged["model_min_races"]),
+        enabled_features=tuple(enabled),
+        train_start=str(merged.get("model_train_start_date") or "") or None,
+        train_end=str(merged.get("model_train_end_date") or "") or None,
+    )
+
+
+def _latest_feature_missing_rates() -> dict:
+    """最新学習モデルの特徴量欠損率マップを返す(設定画面の特徴量一覧に併記する)。
+
+    pandas 非依存。保存済みの metrics(JSON)から読むだけなのでAPIイメージでも動く。
+    """
+    session = get_session()
+    try:
+        row = (
+            session.query(ModelVersion.metrics)
+            .order_by(ModelVersion.trained_at.desc().nullslast(), ModelVersion.version.desc())
+            .first()
+        )
+    finally:
+        session.close()
+    if not row or not row[0]:
+        return {}
+    try:
+        metrics = json.loads(row[0])
+    except (TypeError, ValueError):
+        return {}
+    rates = metrics.get("feature_missing_rates")
+    return rates if isinstance(rates, dict) else {}
 
 
 def _schedule_def(job_name: str) -> dict | None:
@@ -591,11 +781,16 @@ def get_settings_view(include_env: bool = True) -> dict:
             "secret": True,
         },
     ]
+    selected_features, _ = resolve_features(
+        _enabled_features_from(merged["model_enabled_features"])
+    )
+    missing_rates = _latest_feature_missing_rates()
     return {
         "editable": {
             key: merged[key]
             for key in EDITABLE_KEYS
             if key.startswith("schedule_")
+            or key.startswith("model_")
             or key
             in (
                 "betting_mode",
@@ -604,6 +799,7 @@ def get_settings_view(include_env: bool = True) -> dict:
                 "bet_min_expected_value",
             )
         },
+        "model_features": feature_catalog(selected_features, missing_rates),
         "readonly": {
             "scraper_request_interval_seconds": settings.SCRAPER_REQUEST_INTERVAL_SECONDS,
             "ipat_dry_run": settings.IPAT_DRY_RUN,
@@ -624,6 +820,11 @@ def save_settings(values: dict[str, object]) -> dict:
         raise ValueError(f"変更できない設定キーです: {', '.join(sorted(unknown))}")
 
     validated = {key: _parse(key, value) for key, value in values.items()}
+
+    start = validated.get("model_train_start_date")
+    end = validated.get("model_train_end_date")
+    if start and end and str(start) > str(end):
+        raise ValueError("学習期間は開始日 ≦ 終了日 で指定してください。")
 
     session = get_session()
     try:

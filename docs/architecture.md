@@ -62,17 +62,20 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 主な画面:
 
-- 概要
+- 概要(回収率や予測モデルの要約。予測モデルカードから学習モデル一覧へのリンクを持つ)
 - レース一覧 / 詳細(日付、競馬場、状態、馬名、騎手、厩舎などで検索・絞り込み)
 - 馬詳細
-- 買い目一覧
+- 買い目一覧(シミュレーション / 本番をボタンで切り替え。本番ボタンは赤で明示)
+- 学習モデル一覧(過去に学習した全モデルの比較・分析。`/models`)
 - ジョブ
 - 設定
 - モデル詳細
 
-概要、レース詳細、買い目一覧に表示されるモデルバージョンはモデル詳細ページへリンクします。モデル詳細ページでは学習日時、評価指標、使用特徴量、カテゴリ特徴量、特徴量重要度、学習パラメータを表示します。
+概要、レース詳細、買い目一覧に表示されるモデルバージョンはモデル詳細ページへリンクします。モデル詳細ページでは学習日時、評価指標、使用特徴量、カテゴリ特徴量、特徴量重要度(gain・欠損率併記)、確率較正(キャリブレーション)、学習パラメータを表示します。
 
-ジョブページは手動実行、バックフィル、バックテスト、ジョブ予約、予約一覧、実行履歴を扱います。定期実行設定とシステム再起動操作は設定ページで扱います。
+学習モデル一覧ページは、全モデルバージョンの検証 AUC / logloss の推移グラフと一覧表を表示し、稼働中・ベストのモデルを示します。各ページのモデルバージョンリンクは新しいタブで詳細を開きます。
+
+ジョブページは手動実行、バックフィル、長期バックフィル予約(開始年月・終了年月で期間指定)、バックテスト、ジョブ予約、予約一覧、実行履歴を扱います。定期実行設定とシステム再起動操作は設定ページで扱います。
 
 ## データモデル
 
@@ -142,8 +145,8 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 | `calibrated` | 校正器を作成できたか |
 | `feature_columns` | 使用特徴量一覧(JSON) |
 | `categorical_features` | カテゴリ特徴量一覧(JSON) |
-| `feature_importances` | 特徴量重要度(JSON) |
-| `metrics` | 追加評価指標(JSON) |
+| `feature_importances` | 特徴量重要度(JSON。gain 値と各特徴量の欠損率を含む) |
+| `metrics` | 追加評価指標(JSON。全特徴量の欠損率 `feature_missing_rates` を含む) |
 | `training_params` | 学習パラメータ(JSON) |
 | `model_path` | モデルファイルパス |
 
@@ -201,6 +204,9 @@ Web UI で変更できる主な設定:
 - `collect`, `collect_horses`, `predict`, `train` の確認間隔
 - `bet_decide` の発走前分数
 - `settle` の発走後分数
+- モデル学習パラメータ(LightGBM のハイパーパラメータ)
+- 使用特徴量の選択(グループ別の ON/OFF。各特徴量には最新学習時点の欠損率を併記)
+- 学習期間(学習に使う確定レースの開始日 / 終了日。空欄なら全期間)
 
 設定ページでは、画面上で値を変更しても保存ボタンを押すまで DB へ反映しません。
 
@@ -260,63 +266,59 @@ Web UI で変更できる主な設定:
 
 ## 特徴量生成
 
-特徴量は `src/predictor/features.py` と `src/predictor/history.py` で作ります。
+特徴量の集合・ラベル・グループは `src/common/feature_catalog.py` に一元管理し、実際の値は `src/predictor/features.py` と `src/predictor/history.py` で作ります。`feature_catalog.py` は pandas / numpy / lightgbm に依存しません。API イメージが ML 系ライブラリを持たないため、特徴量の「定義」だけを切り出して predictor 側(features/history)と API 側(dynamic_config)の双方から参照します。
 
-基本特徴量:
+学習・予測・バックテストはいずれも `history.build_entries_frame` → `features.build_features` を共通で通すため、特徴量の追加はこの 2 つに実装すれば 3 経路すべてに反映されます。
 
-- `horse_number`
-- `age`
-- `weight`
-- `horse_weight`
-- `horse_weight_diff`
-- `field_size`
-- `distance`
+基礎(出馬表):
 
-季節特徴量:
+- `horse_number`, `age`, `weight`, `horse_weight`, `horse_weight_diff`, `field_size`, `distance`
+- 季節 `season_sin` / `season_cos`(開催日を 1 年周期 `2π × 通算日 / 365.25` の sin / cos に写像。年末年始の不連続を避ける)
 
-- `season_sin`
-- `season_cos`
+枠順・相対値(レース内の出走馬から算出):
 
-開催日を 1 年周期(`2π × 通算日 / 365.25`)の sin / cos に写像します。月番号をそのまま使うと年末年始(12 月と 1 月)で不連続になるため、周期性を保ったまま季節変動をモデルへ渡します。
+- `draw_ratio`(馬番 / 頭数), `weight_rel`(斤量 − レース平均), `horse_weight_rel`(馬体重 − レース平均)
 
-カテゴリ特徴量:
+レース条件(カテゴリ + `race_number`):
 
-- `sex`
-- `jockey_id`
-- `trainer_id`
-- `sire_id`
+- `track_type`, `going`, `weather`, `direction`, `race_class`, `venue`
 
-過去戦績特徴量:
+カテゴリ(ID 等):
 
-- `career_starts`
-- `win_rate`
-- `place_rate`
-- `avg_finish_recent3`
-- `avg_finish_recent5`
-- `best_last3f_recent5`
-- `avg_last3f_recent5`
-- `days_since_last`
-- `distance_change`
-- `same_dist_starts`
-- `same_dist_avg_finish`
-- `same_surface_starts`
-- `same_surface_avg_finish`
+- `sex`, `jockey_id`, `trainer_id`, `sire_id`
 
-単勝オッズと人気は表示、データ品質確認、買い目判定、バックテストで使いますが、現在のモデル特徴量には含めていません。
+馬の過去戦績特徴量:
+
+- `career_starts`, `win_rate`, `place_rate`, `avg_finish_recent3`, `avg_finish_recent5`, `best_last3f_recent5`, `avg_last3f_recent5`, `days_since_last`, `distance_change`, `same_dist_starts`, `same_dist_avg_finish`, `same_surface_starts`, `same_surface_avg_finish`
+- 直近 10 走 `win_rate_recent10` / `place_rate_recent10`、同馬場状態 `same_going_starts` / `same_going_place_rate`
+
+騎手・調教師の過去戦績特徴量(`jockey_*` / `trainer_*`):
+
+- `*_starts`, `*_win_rate`, `*_place_rate`, `*_avg_finish_recent10`, `*_same_dist_starts` / `*_same_dist_win_rate`, `*_same_surface_starts` / `*_same_surface_win_rate`, `*_same_going_starts` / `*_same_going_win_rate`
+
+履歴特徴量は対象レース日より前の過去戦績だけで作り、未来結果のリークを避けます。該当が無い項目は欠損(NaN)のまま LightGBM に渡します。
+
+### 使用特徴量の選択と既定値
+
+設定画面で特徴量をグループ単位で ON/OFF できます。既定 ON は「汎化しやすく欠損の少ない最適セット」(`feature_catalog.DEFAULT_ENABLED_FEATURES`)で、高カードナリティで過学習しやすい生 ID(`jockey_id` / `trainer_id` / `sire_id`)、弱い / 冗長な素性、今回追加した拡張素性(同馬場状態・直近 10 走)は既定 OFF です。生 ID の代わりに騎手・調教師の勝率などの集計特徴量を既定で使います。すべて外した場合は安全のため全特徴量で学習します。
+
+単勝オッズと人気は表示、データ品質確認、買い目判定、バックテストで使いますが、モデル特徴量には含めていません。
 
 ## 学習と予測
 
-学習対象は着順が確定しているレースです。各出走馬について `finish_position == 1` を正例にします。
+学習対象は着順が確定しているレースです。各出走馬について `finish_position == 1` を正例にします。設定で学習期間(開始日 / 終了日)を指定でき、未指定なら全期間を使います。
 
 学習手順:
 
-1. 確定レースと出走馬を読み込みます。
+1. 確定レースと出走馬を読み込みます(学習期間が指定されていれば期間で絞り込みます)。
 2. レース日順に並べ、古いデータを学習、新しいデータを検証に分けます。
 3. LightGBM の二値分類モデルを学習します。
 4. 検証データで early stopping します。
 5. 検証データの確率で `IsotonicRegression` による校正器を作ります。
 6. 全データで最終モデルを学習し、モデル、特徴量一覧、カテゴリ特徴量、校正器、`KB` 付きバージョンを `/app/data/model.pkl` に保存します。
 7. 評価指標、特徴量一覧、特徴量重要度、学習パラメータを `model_versions` に保存します。
+
+特徴量重要度は gain(利得)で記録します。LightGBM 既定の split(分岐回数)は高カードナリティな ID が不当に高く出るため、寄与の大きさを表す gain を使います。あわせて学習データの特徴量ごとの欠損率を算出し、`model_versions` に保存して設定画面・モデル詳細で表示します。
 
 予測時は最新モデルを読み込み、未確定の今後レースに対して `predictions` を保存します。
 
@@ -361,6 +363,7 @@ Web UI で変更できる主な設定:
 - `GET /api/bets`
 - `GET /api/models`
 - `GET /api/models/{version}`
+- `GET /api/models/{version}/calibration`
 - `GET /api/jobs`
 - `POST /api/jobs/{job_name}/run`
 - `POST /api/job-reservations`
