@@ -88,7 +88,6 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
     15000,
     [auth?.authenticated]
   );
-
   if (error) return <ErrorNote message={error} />;
   if (!data) return <div className="loading">読み込み中...</div>;
 
@@ -114,7 +113,15 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
       <section className="overview-section">
         <h2>予測モデル / レース</h2>
         <div className="card-grid">
-          <div className="card">
+          <div className="card model-card">
+            <a
+              className="link-button model-list-link"
+              href="/models"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+             過去モデルの推移 → 
+            </a>
             <div className="card-title">予測モデル</div>
             <div className="metric">{data.model.trained ? "学習済み" : "未学習"}</div>
             <div className="card-rows">

@@ -97,15 +97,59 @@ export interface SettingsView {
     schedule_train_days: string;
     schedule_bet_decide_days: string;
     schedule_settle_days: string;
+    model_learning_rate: number;
+    model_num_leaves: number;
+    model_max_depth: number;
+    model_min_child_samples: number;
+    model_reg_alpha: number;
+    model_reg_lambda: number;
+    model_feature_fraction: number;
+    model_bagging_fraction: number;
+    model_max_boost_rounds: number;
+    model_early_stopping_rounds: number;
+    model_valid_fraction: number;
+    model_min_races: number;
+    model_enabled_features: string;
+    model_train_start_date: string;
+    model_train_end_date: string;
   };
   readonly: {
     scraper_request_interval_seconds: number;
     ipat_dry_run: boolean;
     ipat_credentials_configured: boolean;
   };
+  model_features: ModelFeatureGroup[];
   scheduled_jobs: ScheduledJobSetting[];
   env_settings: EnvSetting[];
 }
+
+export interface ModelFeatureItem {
+  name: string;
+  label: string;
+  enabled: boolean;
+  categorical: boolean;
+  missing_rate?: number | null;
+}
+
+export interface ModelFeatureGroup {
+  group: string;
+  features: ModelFeatureItem[];
+}
+
+// モデル学習パラメータ(数値)の編集キー。Settings画面の入力欄定義に使う。
+export type ModelParamKey =
+  | "model_learning_rate"
+  | "model_num_leaves"
+  | "model_max_depth"
+  | "model_min_child_samples"
+  | "model_reg_alpha"
+  | "model_reg_lambda"
+  | "model_feature_fraction"
+  | "model_bagging_fraction"
+  | "model_max_boost_rounds"
+  | "model_early_stopping_rounds"
+  | "model_valid_fraction"
+  | "model_min_races";
 
 export interface ScheduledJobSetting {
   job_name: string;
@@ -159,6 +203,7 @@ export interface Overview {
 export interface ModelFeatureImportance {
   name: string;
   importance: number;
+  missing_rate?: number | null;
 }
 
 export interface ModelVersionDetail {
@@ -177,6 +222,35 @@ export interface ModelVersionDetail {
   metrics: Record<string, unknown>;
   training_params: Record<string, unknown>;
   model_path: string | null;
+}
+
+// モデル一覧(/api/models)の1件。バージョン比較グラフで使う指標のみ参照する。
+export interface ModelVersionSummary {
+  version: string;
+  trained_at: string | null;
+  auc: number | null;
+  logloss: number | null;
+  race_count: number | null;
+}
+
+export interface ModelsListResponse {
+  models: ModelVersionSummary[];
+}
+
+export interface ModelCalibrationBin {
+  mean_predicted: number;
+  actual_rate: number;
+  count: number;
+  score_min: number;
+  score_max: number;
+}
+
+export interface ModelCalibration {
+  version: string;
+  sample_count: number;
+  win_count: number;
+  base_rate: number | null;
+  bins: ModelCalibrationBin[];
 }
 
 export interface TopPrediction {

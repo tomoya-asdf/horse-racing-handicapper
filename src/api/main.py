@@ -514,6 +514,64 @@ def model_detail(version: str) -> dict:
         session.close()
 
 
+@app.get("/api/models/{version}/calibration")
+def model_calibration(version: str, bins: int = 10) -> dict:
+    """本番予測の確率較正(キャリブレーション)を集計して返す。
+
+    このバージョンが予測した確定済みレースについて、予測スコア(=1着になる確率)を
+    分位で ``bins`` 個のビンに分け、各ビンの「平均予測確率」と「実際の1着率」を返す。
+    予測確率が正確なら両者は一致する(プロット上で対角線に乗る)。
+    スコア分布は1着率が低い側に偏るため、等幅でなく分位でビン分割する。
+    """
+    bins = min(max(bins, 2), 20)
+    session = get_session()
+    try:
+        rows = (
+            session.query(Prediction.score, Entry.finish_position)
+            .join(Entry, Prediction.entry_id == Entry.id)
+            .filter(
+                Prediction.model_version == version,
+                Prediction.score.isnot(None),
+                Entry.finish_position.isnot(None),
+            )
+            .all()
+        )
+        pairs = sorted(
+            ((float(score), 1 if finish == 1 else 0) for score, finish in rows),
+            key=lambda p: p[0],
+        )
+        total = len(pairs)
+        wins_total = sum(won for _, won in pairs)
+        result_bins = []
+        bin_count = max(1, min(bins, total))
+        for i in range(bin_count):
+            start = i * total // bin_count
+            end = (i + 1) * total // bin_count
+            group = pairs[start:end]
+            if not group:
+                continue
+            scores = [score for score, _ in group]
+            wins = sum(won for _, won in group)
+            result_bins.append(
+                {
+                    "mean_predicted": sum(scores) / len(group),
+                    "actual_rate": wins / len(group),
+                    "count": len(group),
+                    "score_min": scores[0],
+                    "score_max": scores[-1],
+                }
+            )
+        return {
+            "version": version,
+            "sample_count": total,
+            "win_count": wins_total,
+            "base_rate": (wins_total / total) if total else None,
+            "bins": result_bins,
+        }
+    finally:
+        session.close()
+
+
 @app.get("/api/races")
 def list_races(
     request: Request,
@@ -1348,6 +1406,10 @@ if WEBUI_DIST.exists():
 
     @app.get("/trainers/{trainer_id}")
     def trainer_page(trainer_id: str) -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
+    @app.get("/models")
+    def models_page() -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
 
     @app.get("/models/{version}")
