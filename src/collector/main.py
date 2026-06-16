@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -13,20 +13,13 @@ from src.common.models import (
     Horse,
     HorsePedigree,
     HorseResult,
-    Jockey,
-    JockeyResult,
-    PersonResultsCoverage,
     Race,
     RaceCollectionStatus,
-    Trainer,
-    TrainerResult,
 )
 from src.common.timeutils import now_jst
 
 # races 起点の成績収集の種別(RaceCollectionStatus.kind と一致)
 KIND_HORSE = "horse_results"
-KIND_JOCKEY = "jockey_results"
-KIND_TRAINER = "trainer_results"
 
 logging.basicConfig(level=logging.INFO)
 # 5秒間隔のジョブポーリングがINFOログを埋め尽くすため、APSchedulerのログは抑制する
@@ -163,16 +156,6 @@ def _update_finished_results() -> int:
 
 
 # ---- races 起点の収集ドライバ共通部 ----
-
-def _person_since_date(race_date) -> date:
-    """そのレースについて騎手/調教師成績を遡る下限日(その年の1/1から設定年数分前)。
-
-    例: race_date=2026年・PERSON_RESULTS_YEARS_BACK=1 なら 2025-01-01(当年＋前年)。
-    """
-    year = race_date.year if race_date is not None else now_jst().year
-    back = max(0, settings.PERSON_RESULTS_YEARS_BACK)
-    return date(year - back, 1, 1)
-
 
 def _races_needing_collection(session, kind: str, limit: int):
     """まだ ``kind`` の収集が済んでいないレースを新しい順に最大 ``limit`` 件返す。"""
@@ -362,191 +345,6 @@ def _update_horse_results(max_races: int) -> int:
     return processed
 
 
-# ---- 騎手・調教師の過去成績 ----
-
-def _upsert_person_results(session, model, id_attr: str, entity_id: str, results: list[dict]) -> None:
-    """騎手/調教師の成績を**追記のみ**で反映する((race_key, horse_id) で重複排除)。
-
-    調教師は同一レースに複数頭を出すため、race_key 単独でなく (race_key, horse_id) で一意。
-    """
-    existing = set(
-        session.query(model.race_key, model.horse_id)
-        .filter(getattr(model, id_attr) == entity_id)
-        .all()
-    )
-    seen: set[tuple[str | None, str | None]] = set()
-    for row in results:
-        key = (row.get("race_key"), row.get("horse_id"))
-        if key[0] is None:
-            if existing:  # race_key 無し行は既存がある相手では追加しない(重複防止)
-                continue
-        elif key in existing or key in seen:
-            continue
-        seen.add(key)
-        session.add(model(**{id_attr: entity_id}, **row))
-
-
-def _upsert_jockey_results(session, jockey_id: str, name: str | None, results: list[dict]) -> None:
-    _upsert_person_results(session, JockeyResult, "jockey_id", jockey_id, results)
-    jockey = session.get(Jockey, jockey_id)
-    if jockey is None:
-        jockey = Jockey(jockey_id=jockey_id)
-        session.add(jockey)
-    if not name:
-        entry = (
-            session.query(Entry)
-            .filter(Entry.jockey_id == jockey_id, Entry.jockey.isnot(None), Entry.jockey != "")
-            .order_by(Entry.id.desc())
-            .first()
-        )
-        name = entry.jockey if entry else None
-    if name:
-        jockey.name = name
-    jockey.results_fetched_at = now_jst()
-
-
-def _upsert_trainer_results(session, trainer_id: str, name: str | None, results: list[dict]) -> None:
-    _upsert_person_results(session, TrainerResult, "trainer_id", trainer_id, results)
-    trainer = session.get(Trainer, trainer_id)
-    if trainer is None:
-        trainer = Trainer(trainer_id=trainer_id)
-        session.add(trainer)
-    if not name:
-        entry = (
-            session.query(Entry)
-            .filter(Entry.trainer_id == trainer_id, Entry.trainer.isnot(None), Entry.trainer != "")
-            .order_by(Entry.id.desc())
-            .first()
-        )
-        name = entry.trainer if entry else None
-    if name:
-        trainer.name = name
-    trainer.results_fetched_at = now_jst()
-
-
-def _collect_one_person(
-    person_type: str, entity_id: str, since_date: date, upsert_fn, refresh_days: int
-) -> None:
-    """1人(騎手/調教師)の成績を、必要なら race.html から取得して追記する。
-
-    カバレッジ記録(PersonResultsCoverage)を見て、必要期間(since_date 以降)を
-    既に網羅済みかつ鮮度内ならネットワークアクセスせずスキップする。
-    """
-    session = get_session()
-    try:
-        cov = (
-            session.query(PersonResultsCoverage)
-            .filter_by(person_type=person_type, person_id=entity_id)
-            .one_or_none()
-        )
-        covered = cov is not None and cov.oldest_date is not None and cov.oldest_date <= since_date
-        fresh = (
-            cov is not None
-            and cov.fetched_at is not None
-            and (now_jst() - cov.fetched_at).days < refresh_days
-        )
-        if covered and fresh:
-            return  # 取得済み・鮮度内 → スキップ(1リクエストも投げない)
-    finally:
-        session.close()
-
-    try:
-        data = scraper.fetch_person_results(person_type, entity_id, since_date)
-    except Exception as exc:
-        logger.warning("failed to fetch %s results id=%s: %s", person_type, entity_id, exc)
-        return
-
-    session = get_session()
-    try:
-        upsert_fn(session, entity_id, data["name"], data["results"])
-        cov = (
-            session.query(PersonResultsCoverage)
-            .filter_by(person_type=person_type, person_id=entity_id)
-            .one_or_none()
-        )
-        if cov is None:
-            cov = PersonResultsCoverage(person_type=person_type, person_id=entity_id)
-            session.add(cov)
-        cov.oldest_date = (
-            since_date if cov.oldest_date is None else min(cov.oldest_date, since_date)
-        )
-        cov.fetched_at = now_jst()
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("failed to upsert %s results id=%s", person_type, entity_id)
-    finally:
-        session.close()
-
-
-def _update_person_results_by_race(
-    kind: str, id_attr: str, person_type: str, upsert_fn, refresh_days: int, max_races: int
-) -> int:
-    """races 起点で、未収集レースの騎手/調教師について「当年＋前年」の成績を集める。
-
-    各レースの開催年から下限日(since_date)を決め、出走している騎手/調教師ごとに
-    race.html を新しい順に取得する。エンティティは多レースに跨るため、同一エンティティは
-    このrun内で1回のみ取得し、カバレッジ記録で過去ランの再取得も避ける。
-    """
-    if max_races <= 0:
-        return 0
-    session = get_session()
-    try:
-        races = _races_needing_collection(session, kind, max_races)
-        race_infos = [
-            (
-                race.id,
-                race.race_date,
-                list(dict.fromkeys(getattr(e, id_attr) for e in race.entries if getattr(e, id_attr))),
-            )
-            for race in races
-        ]
-    finally:
-        session.close()
-
-    # 同一ラン内で同じ(エンティティ, 下限日)を二度取得しない。下限日まで含めるのは、
-    # 古いレースほど古い期間が必要で、新しいレースの取得だけでは網羅できないため。
-    fetched: set[tuple[str, date]] = set()
-    processed = 0
-    for race_id, race_date, entity_ids in race_infos:
-        since_date = _person_since_date(race_date)
-        for entity_id in entity_ids:
-            if (entity_id, since_date) in fetched:
-                continue
-            fetched.add((entity_id, since_date))
-            _collect_one_person(person_type, entity_id, since_date, upsert_fn, refresh_days)
-        session = get_session()
-        try:
-            _mark_race_collected(session, race_id, kind)
-            session.commit()
-        finally:
-            session.close()
-        processed += 1
-    return processed
-
-
-def _update_jockey_results(max_races: int) -> int:
-    return _update_person_results_by_race(
-        KIND_JOCKEY,
-        "jockey_id",
-        "jockey",
-        _upsert_jockey_results,
-        settings.JOCKEY_RESULTS_REFRESH_DAYS,
-        max_races,
-    )
-
-
-def _update_trainer_results(max_races: int) -> int:
-    return _update_person_results_by_race(
-        KIND_TRAINER,
-        "trainer_id",
-        "trainer",
-        _upsert_trainer_results,
-        settings.TRAINER_RESULTS_REFRESH_DAYS,
-        max_races,
-    )
-
-
 def _run_collect(params: dict) -> str:
     # JRAは主に土日開催のため、当日だけでなく数日先まで収集する
     # (開催の無い日はレース一覧が空で返るだけなので、リクエスト数は1日1回分増えるのみ)
@@ -578,18 +376,6 @@ def _run_collect_horses(params: dict) -> str:
     limit = _collect_races_limit(params)
     processed = _update_horse_results(limit)
     return f"馬の過去成績・血統を{processed}レース分収集しました(上限{limit}レース)"
-
-
-def _run_collect_jockeys(params: dict) -> str:
-    limit = _collect_races_limit(params)
-    processed = _update_jockey_results(limit)
-    return f"騎手の過去戦績を{processed}レース分収集しました(上限{limit}レース)"
-
-
-def _run_collect_trainers(params: dict) -> str:
-    limit = _collect_races_limit(params)
-    processed = _update_trainer_results(limit)
-    return f"調教師の過去戦績を{processed}レース分収集しました(上限{limit}レース)"
 
 
 def _run_backfill(params: dict) -> str:
@@ -631,41 +417,11 @@ def _scheduled_collect_horses() -> None:
     jobs.run_scheduled(jobs.COLLECT_HORSES, _run_collect_horses)
 
 
-def _scheduled_collect_jockeys() -> None:
-    config = load_scheduled_job_config(jobs.COLLECT_JOCKEYS)
-    if config is None or not config.enabled:
-        return
-    if not jobs.scheduled_run_due(
-        jobs.COLLECT_JOCKEYS,
-        config.interval_minutes,
-        weekdays=config.weekdays,
-        exact_time=config.exact_time,
-    ):
-        return
-    jobs.run_scheduled(jobs.COLLECT_JOCKEYS, _run_collect_jockeys)
-
-
-def _scheduled_collect_trainers() -> None:
-    config = load_scheduled_job_config(jobs.COLLECT_TRAINERS)
-    if config is None or not config.enabled:
-        return
-    if not jobs.scheduled_run_due(
-        jobs.COLLECT_TRAINERS,
-        config.interval_minutes,
-        weekdays=config.weekdays,
-        exact_time=config.exact_time,
-    ):
-        return
-    jobs.run_scheduled(jobs.COLLECT_TRAINERS, _run_collect_trainers)
-
-
 def _poll_queued_jobs() -> None:
     handlers = {
         jobs.COLLECT: _run_collect,
         jobs.BACKFILL: _run_backfill,
         jobs.COLLECT_HORSES: _run_collect_horses,
-        jobs.COLLECT_JOCKEYS: _run_collect_jockeys,
-        jobs.COLLECT_TRAINERS: _run_collect_trainers,
     }
     jobs.enqueue_due_reservations(list(handlers))
     jobs.process_queued(handlers)
@@ -678,23 +434,17 @@ def main() -> None:
             jobs.COLLECT,
             jobs.BACKFILL,
             jobs.COLLECT_HORSES,
-            jobs.COLLECT_JOCKEYS,
-            jobs.COLLECT_TRAINERS,
         ]
     )
     scheduler = BlockingScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(_scheduled_collect, "interval", minutes=1)
     scheduler.add_job(_scheduled_collect_horses, "interval", minutes=1)
-    scheduler.add_job(_scheduled_collect_jockeys, "interval", minutes=1)
-    scheduler.add_job(_scheduled_collect_trainers, "interval", minutes=1)
     scheduler.add_job(
         _poll_queued_jobs, "interval", seconds=jobs.POLL_INTERVAL_SECONDS
     )
     logger.info("collector started: interval=%s min", settings.COLLECT_INTERVAL_MINUTES)
     _scheduled_collect()
     _scheduled_collect_horses()
-    _scheduled_collect_jockeys()
-    _scheduled_collect_trainers()
     scheduler.start()
 
 

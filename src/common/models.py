@@ -147,78 +147,6 @@ class HorseResult(Base):
     created_at = Column(DateTime, default=now_jst)
 
 
-class Jockey(Base):
-    __tablename__ = "jockeys"
-
-    jockey_id = Column(String, primary_key=True)
-    name = Column(String)
-    results_fetched_at = Column(DateTime)
-
-
-class JockeyResult(Base):
-    __tablename__ = "jockey_results"
-    __table_args__ = (
-        UniqueConstraint("jockey_id", "race_key", "horse_id", name="uq_jockey_results_race_horse"),
-    )
-
-    id = Column(Integer, primary_key=True)
-    jockey_id = Column(String, index=True, nullable=False)
-    race_key = Column(String)
-    race_date = Column(Date)
-    venue = Column(String)
-    race_name = Column(String)
-    field_size = Column(Integer)
-    horse_id = Column(String)
-    horse_name = Column(String)
-    horse_number = Column(Integer)
-    trainer = Column(String)
-    trainer_id = Column(String)
-    weight = Column(Float)
-    odds = Column(Float)
-    popularity = Column(Integer)
-    finish_position = Column(Integer)
-    distance = Column(Integer)
-    track_type = Column(String)
-    going = Column(String)
-    created_at = Column(DateTime, default=now_jst)
-
-
-class Trainer(Base):
-    __tablename__ = "trainers"
-
-    trainer_id = Column(String, primary_key=True)
-    name = Column(String)
-    results_fetched_at = Column(DateTime)
-
-
-class TrainerResult(Base):
-    __tablename__ = "trainer_results"
-    __table_args__ = (
-        UniqueConstraint("trainer_id", "race_key", "horse_id", name="uq_trainer_results_race_horse"),
-    )
-
-    id = Column(Integer, primary_key=True)
-    trainer_id = Column(String, index=True, nullable=False)
-    race_key = Column(String)
-    race_date = Column(Date)
-    venue = Column(String)
-    race_name = Column(String)
-    field_size = Column(Integer)
-    horse_id = Column(String)
-    horse_name = Column(String)
-    horse_number = Column(Integer)
-    jockey = Column(String)
-    jockey_id = Column(String)
-    weight = Column(Float)
-    odds = Column(Float)
-    popularity = Column(Integer)
-    finish_position = Column(Integer)
-    distance = Column(Integer)
-    track_type = Column(String)
-    going = Column(String)
-    created_at = Column(DateTime, default=now_jst)
-
-
 class Prediction(Base):
     __tablename__ = "predictions"
     __table_args__ = (
@@ -341,9 +269,9 @@ class Bet(Base):
 class RaceCollectionStatus(Base):
     """レース単位の成績収集フラグ。
 
-    収集は races を起点に駆動し、あるレースの全参加者(馬/騎手/調教師)の成績を
-    取り切ったら、その (race_id, kind) を記録して再処理を避ける。``races`` への列追加は
-    create_all が反映しないため、別テーブルで持つ。
+    収集は races を起点に駆動し、あるレースの全出走馬の過去成績を取り切ったら、その
+    (race_id, kind) を記録して再処理を避ける。``races`` への列追加は create_all が
+    反映しないため、別テーブルで持つ。
     """
 
     __tablename__ = "race_collection_status"
@@ -351,30 +279,8 @@ class RaceCollectionStatus(Base):
 
     id = Column(Integer, primary_key=True)
     race_id = Column(Integer, ForeignKey("races.id"), nullable=False, index=True)
-    kind = Column(String(20), nullable=False)  # horse_results / jockey_results / trainer_results
+    kind = Column(String(20), nullable=False)  # horse_results
     collected_at = Column(DateTime, default=now_jst)
-
-
-class PersonResultsCoverage(Base):
-    """騎手/調教師の成績収集カバレッジ。再取得を避けるための進捗記録。
-
-    ``oldest_date`` はその人物について「これより新しい側は網羅済み」と言える最古の
-    レース日。``fetched_at`` が ``*_RESULTS_REFRESH_DAYS`` 以内かつ必要な期間を
-    ``oldest_date`` が覆っていれば、その人物の取得を丸ごとスキップできる
-    (race.html を1リクエストも投げない)。``races`` 等への列追加は create_all が
-    反映しないため、別テーブルで持つ。
-    """
-
-    __tablename__ = "person_results_coverage"
-    __table_args__ = (
-        UniqueConstraint("person_type", "person_id", name="uq_person_results_coverage"),
-    )
-
-    id = Column(Integer, primary_key=True)
-    person_type = Column(String(10), nullable=False)  # jockey / trainer
-    person_id = Column(String, nullable=False, index=True)
-    oldest_date = Column(Date)
-    fetched_at = Column(DateTime, default=now_jst)
 
 
 class HorsePedigree(Base):

@@ -28,8 +28,6 @@ Handler = Callable[[dict], "str | None"]
 COLLECT = "collect"  # collector
 BACKFILL = "backfill"  # collector
 COLLECT_HORSES = "collect_horses"  # collector(馬の過去成績収集)
-COLLECT_JOCKEYS = "collect_jockeys"  # collector(騎手の過去成績収集)
-COLLECT_TRAINERS = "collect_trainers"  # collector(調教師の過去成績収集)
 PREDICT = "predict"  # predictor
 BET_DECIDE = "bet_decide"  # predictor
 SETTLE = "settle"  # predictor
@@ -39,8 +37,6 @@ ALL_JOBS = (
     COLLECT,
     BACKFILL,
     COLLECT_HORSES,
-    COLLECT_JOCKEYS,
-    COLLECT_TRAINERS,
     PREDICT,
     BET_DECIDE,
     SETTLE,

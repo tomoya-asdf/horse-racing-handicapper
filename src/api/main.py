@@ -37,15 +37,11 @@ from src.common.models import (
     Horse,
     HorsePedigree,
     HorseResult,
-    Jockey,
-    JockeyResult,
     JobRun,
     ModelVersion,
     Prediction,
     Race,
     RaceCollectionStatus,
-    Trainer,
-    TrainerResult,
 )
 from src.common.paths import MODEL_PATH
 from src.common.timeutils import JST, now_jst
@@ -66,14 +62,6 @@ JOB_LABELS = {
     jobs.TRAIN: "モデル学習",
     jobs.BACKTEST: "回収率バックテスト",
 }
-
-# 一度にバックフィルできる最大日数(netkeibaへの負荷を抑えるため)
-JOB_LABELS.update(
-    {
-        jobs.COLLECT_JOCKEYS: "騎手過去戦績収集",
-        jobs.COLLECT_TRAINERS: "調教師過去戦績収集",
-    }
-)
 
 BACKFILL_MAX_DAYS = 31
 ADMIN_COOKIE_NAME = "admin_session"
@@ -373,34 +361,6 @@ def overview(request: Request) -> dict:
             or 0
         )
         horse_uncollected_count = max(horse_target_count - horse_result_horse_count, 0)
-        jockey_result_jockey_count = (
-            session.query(func.count(func.distinct(Entry.jockey_id)))
-            .join(JockeyResult, JockeyResult.jockey_id == Entry.jockey_id)
-            .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
-            .scalar()
-            or 0
-        )
-        jockey_target_count = (
-            session.query(func.count(func.distinct(Entry.jockey_id)))
-            .filter(Entry.jockey_id.isnot(None), Entry.jockey_id != "")
-            .scalar()
-            or 0
-        )
-        jockey_uncollected_count = max(jockey_target_count - jockey_result_jockey_count, 0)
-        trainer_result_trainer_count = (
-            session.query(func.count(func.distinct(Entry.trainer_id)))
-            .join(TrainerResult, TrainerResult.trainer_id == Entry.trainer_id)
-            .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
-            .scalar()
-            or 0
-        )
-        trainer_target_count = (
-            session.query(func.count(func.distinct(Entry.trainer_id)))
-            .filter(Entry.trainer_id.isnot(None), Entry.trainer_id != "")
-            .scalar()
-            or 0
-        )
-        trainer_uncollected_count = max(trainer_target_count - trainer_result_trainer_count, 0)
         last_collected_at = session.query(func.max(Race.created_at)).scalar()
         upcoming_race_count = (
             session.query(func.count(Race.id))
@@ -446,12 +406,6 @@ def overview(request: Request) -> dict:
             "horse_result_horse_count": horse_result_horse_count,
             "horse_target_count": horse_target_count,
             "horse_uncollected_count": horse_uncollected_count,
-            "jockey_result_jockey_count": jockey_result_jockey_count,
-            "jockey_target_count": jockey_target_count,
-            "jockey_uncollected_count": jockey_uncollected_count,
-            "trainer_result_trainer_count": trainer_result_trainer_count,
-            "trainer_target_count": trainer_target_count,
-            "trainer_uncollected_count": trainer_uncollected_count,
             "upcoming_race_count": upcoming_race_count,
             "predicted_upcoming_race_count": predicted_upcoming_race_count,
             "last_collected_at": _iso(last_collected_at),
@@ -753,8 +707,6 @@ def race_detail(request: Request, race_id: int) -> dict:
         }
         collection_status = {
             "horse_results": "horse_results" in collected_kinds,
-            "jockey_results": "jockey_results" in collected_kinds,
-            "trainer_results": "trainer_results" in collected_kinds,
         }
         visible_bets = [b for b in race.bets if is_admin or b.mode != BettingMode.PROD.value]
         bet_entry_ids = {b.entry_id for b in visible_bets}
@@ -1037,126 +989,69 @@ def horse_detail(horse_id: str) -> dict:
         session.close()
 
 
-@app.get("/api/jockeys/{jockey_id}")
-def jockey_detail(jockey_id: str) -> dict:
+def _person_detail(id_attr: str, name_attr: str, partner_attr: str, person_id: str) -> dict:
+    """騎手/調教師の戦績を、収集済みの出走表(entries × races)から構成して返す。
+
+    騎手/調教師の過去成績は個別ページをスクレイプせず、自前に蓄積した出走データから
+    そのまま組み立てる(特徴量も同じ entries から作る)。
+    """
     session = get_session()
     try:
-        jockey = session.get(Jockey, jockey_id)
-        results = (
-            session.query(JockeyResult)
-            .filter(JockeyResult.jockey_id == jockey_id)
-            .order_by(JockeyResult.race_date.desc().nullslast(), JockeyResult.id.desc())
+        entries = (
+            session.query(Entry)
+            .join(Race, Race.id == Entry.race_id)
+            .options(selectinload(Entry.race).selectinload(Race.entries))
+            .filter(getattr(Entry, id_attr) == person_id)
+            .order_by(Race.race_date.desc().nullslast(), Entry.id.desc())
             .limit(50)
             .all()
         )
-        if jockey is None and not results:
-            entry = session.query(Entry).filter(Entry.jockey_id == jockey_id).first()
-            if entry is None:
-                raise HTTPException(status_code=404, detail="jockey not found")
-            name = entry.jockey
-            results_fetched_at = None
-        else:
-            name = jockey.name if jockey else None
-            if not name and results:
-                entry = (
-                    session.query(Entry)
-                    .filter(Entry.jockey_id == jockey_id, Entry.jockey.isnot(None))
-                    .order_by(Entry.id.desc())
-                    .first()
-                )
-                name = entry.jockey if entry else None
-            results_fetched_at = _iso(jockey.results_fetched_at) if jockey else None
+        if not entries:
+            raise HTTPException(status_code=404, detail=f"{name_attr} not found")
+        name = next((getattr(e, name_attr) for e in entries if getattr(e, name_attr)), None)
 
-        return {
-            "jockey_id": jockey_id,
-            "name": name,
-            "results_fetched_at": results_fetched_at,
-            "results": [
+        results = []
+        for e in entries:
+            r = e.race
+            results.append(
                 {
                     "race_key": r.race_key,
                     "race_date": r.race_date.isoformat() if r.race_date else None,
                     "venue": r.venue,
                     "race_name": r.race_name,
-                    "field_size": r.field_size,
-                    "horse_id": r.horse_id,
-                    "horse_name": r.horse_name,
-                    "horse_number": r.horse_number,
-                    "trainer": r.trainer,
-                    "trainer_id": r.trainer_id,
-                    "weight": r.weight,
-                    "odds": r.odds,
-                    "popularity": r.popularity,
-                    "finish_position": r.finish_position,
+                    "field_size": len(r.entries) if r.entries else None,
+                    "horse_id": e.horse_id,
+                    "horse_name": e.horse_name,
+                    "horse_number": e.horse_number,
+                    partner_attr: getattr(e, partner_attr),
+                    f"{partner_attr}_id": getattr(e, f"{partner_attr}_id"),
+                    "weight": e.weight,
+                    "odds": e.odds,
+                    "popularity": e.popularity,
+                    "finish_position": e.finish_position,
                     "distance": r.distance,
                     "track_type": r.track_type,
                     "going": r.going,
                 }
-                for r in results
-            ],
+            )
+        return {
+            f"{name_attr}_id": person_id,
+            "name": name,
+            "results_fetched_at": None,
+            "results": results,
         }
     finally:
         session.close()
+
+
+@app.get("/api/jockeys/{jockey_id}")
+def jockey_detail(jockey_id: str) -> dict:
+    return _person_detail("jockey_id", "jockey", "trainer", jockey_id)
 
 
 @app.get("/api/trainers/{trainer_id}")
 def trainer_detail(trainer_id: str) -> dict:
-    session = get_session()
-    try:
-        trainer = session.get(Trainer, trainer_id)
-        results = (
-            session.query(TrainerResult)
-            .filter(TrainerResult.trainer_id == trainer_id)
-            .order_by(TrainerResult.race_date.desc().nullslast(), TrainerResult.id.desc())
-            .limit(50)
-            .all()
-        )
-        if trainer is None and not results:
-            entry = session.query(Entry).filter(Entry.trainer_id == trainer_id).first()
-            if entry is None:
-                raise HTTPException(status_code=404, detail="trainer not found")
-            name = entry.trainer
-            results_fetched_at = None
-        else:
-            name = trainer.name if trainer else None
-            if not name and results:
-                entry = (
-                    session.query(Entry)
-                    .filter(Entry.trainer_id == trainer_id, Entry.trainer.isnot(None))
-                    .order_by(Entry.id.desc())
-                    .first()
-                )
-                name = entry.trainer if entry else None
-            results_fetched_at = _iso(trainer.results_fetched_at) if trainer else None
-
-        return {
-            "trainer_id": trainer_id,
-            "name": name,
-            "results_fetched_at": results_fetched_at,
-            "results": [
-                {
-                    "race_key": r.race_key,
-                    "race_date": r.race_date.isoformat() if r.race_date else None,
-                    "venue": r.venue,
-                    "race_name": r.race_name,
-                    "field_size": r.field_size,
-                    "horse_id": r.horse_id,
-                    "horse_name": r.horse_name,
-                    "horse_number": r.horse_number,
-                    "jockey": r.jockey,
-                    "jockey_id": r.jockey_id,
-                    "weight": r.weight,
-                    "odds": r.odds,
-                    "popularity": r.popularity,
-                    "finish_position": r.finish_position,
-                    "distance": r.distance,
-                    "track_type": r.track_type,
-                    "going": r.going,
-                }
-                for r in results
-            ],
-        }
-    finally:
-        session.close()
+    return _person_detail("trainer_id", "trainer", "jockey", trainer_id)
 
 
 @app.get("/api/bets")

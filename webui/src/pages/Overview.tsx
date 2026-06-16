@@ -179,25 +179,11 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
             { label: "未収集", value: `${data.data.horse_uncollected_count.toLocaleString()} 頭` },
           ]}
         />
-        <DataCard
-          title="騎手の戦績"
-          metric={`${data.data.jockey_result_jockey_count.toLocaleString()} 人`}
-          rows={[
-            { label: "収集対象", value: `${data.data.jockey_target_count.toLocaleString()} 人` },
-            { label: "収集済み", value: `${data.data.jockey_result_jockey_count.toLocaleString()} 人` },
-            { label: "未収集", value: `${data.data.jockey_uncollected_count.toLocaleString()} 人` },
-          ]}
-        />
-        <DataCard
-          title="調教師の戦績"
-          metric={`${data.data.trainer_result_trainer_count.toLocaleString()} 人`}
-          rows={[
-            { label: "収集対象", value: `${data.data.trainer_target_count.toLocaleString()} 人` },
-            { label: "収集済み", value: `${data.data.trainer_result_trainer_count.toLocaleString()} 人` },
-            { label: "未収集", value: `${data.data.trainer_uncollected_count.toLocaleString()} 人` },
-          ]}
-        />
         </div>
+        <p className="muted">
+          騎手・調教師の戦績は収集済みの出走データ(レース×出走表)からそのまま集計するため、
+          個別の収集は不要です。
+        </p>
       </section>
 
       <section className="overview-section">

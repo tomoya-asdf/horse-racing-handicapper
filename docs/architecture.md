@@ -38,9 +38,9 @@ PostgreSQL です。各サービスは同じ DB を参照します。
 
 - `collect`: 直近レースの収集、終了レースの結果更新、馬過去戦績の一部更新
 - `collect_horses`: 馬の過去戦績と血統をまとめて更新
-- `collect_jockeys`: 騎手の過去戦績をまとめて更新
-- `collect_trainers`: 調教師の過去戦績をまとめて更新
 - `backfill`: 指定期間の過去レース、結果、出走馬の過去戦績、血統を補完
+
+騎手・調教師の過去戦績は専用ジョブを持ちません。収集済みの出走データ(レース×出走表)から特徴量生成時にそのまま集計します(後述)。
 
 ### predictor
 
@@ -125,7 +125,7 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 ### horses / horse_results
 
-`horses` は馬ごとの基本情報、`horse_results` は馬ごとの過去戦績です。過去戦績は特徴量生成に使うため、対象レース日より前の行だけを参照します。`jockey_results` / `trainer_results` も同様に騎手・調教師の過去戦績を保存します。
+`horses` は馬ごとの基本情報、`horse_results` は馬ごとの過去戦績です。過去戦績は特徴量生成に使うため、対象レース日より前の行だけを参照します。騎手・調教師の過去戦績は専用テーブルを持たず、`entries`(出走表)×`races` から直接集計します。
 
 ### horse_pedigree
 
@@ -133,11 +133,7 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 ### race_collection_status
 
-成績収集の進捗フラグです。`race_id`・`kind`(`horse_results` / `jockey_results` / `trainer_results`)・`collected_at` を持ち、`(race_id, kind)` が一意。`races` への列追加は `create_all` が反映しないため、別テーブルで持ちます。
-
-### person_results_coverage
-
-騎手/調教師の成績収集カバレッジです。`person_type`(`jockey` / `trainer`)・`person_id`・網羅済みの最古レース日 `oldest_date`・取得時刻 `fetched_at` を持ち、`(person_type, person_id)` が一意。必要期間が既に取得済みかを判定し、バッチをまたいだ再取得を避けるために使います。
+馬過去戦績の収集進捗フラグです。`race_id`・`kind`(`horse_results`)・`collected_at` を持ち、`(race_id, kind)` が一意。`races` への列追加は `create_all` が反映しないため、別テーブルで持ちます。
 
 ### predictions
 
@@ -238,8 +234,6 @@ Web UI で変更できる主な設定:
 | --- | --- |
 | `collect` | 前回実行から設定分数経過 |
 | `collect_horses` | 前回実行から設定分数経過 |
-| `collect_jockeys` | 前回実行から設定分数経過 |
-| `collect_trainers` | 前回実行から設定分数経過 |
 | `predict` | 前回実行から設定分数経過 |
 | `train` | 前回実行から設定分数経過 |
 | `bet_decide` | 次の対象レースの発走時刻から N 分前 |
@@ -267,13 +261,13 @@ Web UI で変更できる主な設定:
 
 終了したレースは `result.html` から着順と払戻を取得します。直近の終了レースは定期収集時にも再確認します。
 
-### 過去戦績の収集(レース起点・期間付き・漸進的)
+### 過去戦績の収集(馬: レース起点・漸進的)
 
-馬・騎手・調教師の過去戦績は **races(レース一覧)を起点**に収集します。`RaceCollectionStatus` に種別(`horse_results` / `jockey_results` / `trainer_results`)ごとの取得済みフラグを持ち、未収集のレースを新しい順に最大 `RESULTS_RACES_PER_RUN` 件処理し、そのレースの全参加者の成績を取り切ったらフラグを立てます。各成績は**追記のみ**(既存 `(race_key, horse_id)` はスキップ)で保存し、履歴を消さずに積み増します。
+馬の過去戦績は **races(レース一覧)を起点**に収集します。`RaceCollectionStatus` に `horse_results` の取得済みフラグを持ち、未収集のレースを新しい順に最大 `RESULTS_RACES_PER_RUN` 件処理し、そのレースの全出走馬の成績を取り切ったらフラグを立てます。各成績は**追記のみ**(既存 `(race_key, horse_id)` はスキップ)で保存し、履歴を消さずに積み増します。
 
 - **馬**: `https://db.netkeiba.com/horse/result/{horse_id}/`(全キャリアが1ページ)。同一馬は run 内で重複取得せず、過去成績が `HORSE_RESULTS_REFRESH_DAYS` 日以内に取得済みかつ血統取得済みの馬はスキップします。
-- **騎手 / 調教師**: `https://db.netkeiba.com/{jockey|trainer}/race.html?id={id}&page=N` を新しい順にページングします。このページは全着順を1ページ20行・降順の1本のストリームで返し、距離・馬場・馬名・タイム等の列も揃います(着順区分での分割が不要)。各レースの開催年から下限日 `since_date`(開催年と前年 = `PERSON_RESULTS_YEARS_BACK`、既定1)を決め、`since_date` より古いレースに達したらページングを打ち切ります。
-  - **再取得の回避**: 騎手/調教師ごとに `PersonResultsCoverage`(網羅済みの最古レース日 `oldest_date` と取得時刻 `fetched_at`)を記録します。必要な `since_date` を `oldest_date` が覆っていて、かつ `fetched_at` が `{JOCKEY|TRAINER}_RESULTS_REFRESH_DAYS` 日以内なら、その人物の取得を**丸ごとスキップ**します(1リクエストも投げない)。より古い `since_date` が必要なレースに当たったときだけ、降順ストリームを遡って差分を追記します。これによりバッチをまたいだ無駄な再取得を排除します。
+
+**騎手・調教師はスクレイピングしません。** 騎手/調教師は多くのレースに騎乗/出走するため、自前に蓄積した確定レース(`entries` × `races`)だけで「直近10走の平均着順」等の特徴量を十分カバーできます(個別ページ取得が不要で、最も重かった収集処理を丸ごと排除)。特徴量は `history.load_jockey_history` / `load_trainer_history` が `entries` から点推定(対象レース日より前のみ)で組み立てます。
 
 ### 血統(5代血統表)
 

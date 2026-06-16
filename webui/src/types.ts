@@ -70,30 +70,22 @@ export interface SettingsView {
     schedule_bet_decide_enabled: boolean;
     schedule_settle_enabled: boolean;
     schedule_collect_horses_enabled: boolean;
-    schedule_collect_jockeys_enabled: boolean;
-    schedule_collect_trainers_enabled: boolean;
     schedule_train_enabled: boolean;
     schedule_collect_interval_minutes: number | null;
     schedule_predict_interval_minutes: number | null;
     schedule_collect_horses_interval_minutes: number | null;
-    schedule_collect_jockeys_interval_minutes: number | null;
-    schedule_collect_trainers_interval_minutes: number | null;
     schedule_train_interval_minutes: number | null;
     schedule_bet_decide_before_start_minutes: number | null;
     schedule_settle_after_start_minutes: number | null;
     schedule_collect_time: string | null;
     schedule_predict_time: string | null;
     schedule_collect_horses_time: string | null;
-    schedule_collect_jockeys_time: string | null;
-    schedule_collect_trainers_time: string | null;
     schedule_train_time: string | null;
     schedule_bet_decide_time: string | null;
     schedule_settle_time: string | null;
     schedule_collect_days: string;
     schedule_predict_days: string;
     schedule_collect_horses_days: string;
-    schedule_collect_jockeys_days: string;
-    schedule_collect_trainers_days: string;
     schedule_train_days: string;
     schedule_bet_decide_days: string;
     schedule_settle_days: string;
@@ -185,12 +177,6 @@ export interface Overview {
     horse_result_horse_count: number;
     horse_target_count: number;
     horse_uncollected_count: number;
-    jockey_result_jockey_count: number;
-    jockey_target_count: number;
-    jockey_uncollected_count: number;
-    trainer_result_trainer_count: number;
-    trainer_target_count: number;
-    trainer_uncollected_count: number;
     upcoming_race_count: number;
     predicted_upcoming_race_count: number;
     last_collected_at: string | null;
@@ -356,8 +342,6 @@ export interface RaceDetail {
 
 export interface RaceCollectionStatus {
   horse_results: boolean;
-  jockey_results: boolean;
-  trainer_results: boolean;
 }
 
 export interface RaceBetCandidate {

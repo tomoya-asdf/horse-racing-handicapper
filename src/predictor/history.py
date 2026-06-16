@@ -21,7 +21,7 @@ from src.common.feature_catalog import (  # noqa: F401  再エクスポート(fe
     JOCKEY_HISTORY_FEATURES,
     TRAINER_HISTORY_FEATURES,
 )
-from src.common.models import Horse, HorseResult, JockeyResult, TrainerResult
+from src.common.models import Entry, Horse, HorseResult, Race
 
 # 同距離とみなす許容差(m)。1600m戦なら1400〜1800mの実績を「同距離帯」として集計する
 SAME_DISTANCE_TOLERANCE = 200
@@ -89,18 +89,25 @@ def load_sire_map(session) -> dict[str, str]:
     return {str(horse_id): str(sire_id) for horse_id, sire_id in rows}
 
 
-def _load_person_history(session, model, id_column: str) -> dict[str, pd.DataFrame]:
-    person_id = getattr(model, id_column)
+def _load_person_history_from_entries(session, id_column: str) -> dict[str, pd.DataFrame]:
+    """騎手/調教師の履歴を、収集済みの出走表(entries × races)から直接組み立てる。
+
+    騎手・調教師は多くのレースに騎乗/出走するため、自前に蓄積した確定レース
+    (finish_position あり)だけで recent10 等の近走特徴量を十分カバーできる
+    (個別ページのスクレイピングは不要)。距離・馬場はレース側(``races``)から取る。
+    """
+    person_id = getattr(Entry, id_column)
     rows = (
         session.query(
             person_id,
-            model.race_date,
-            model.finish_position,
-            model.distance,
-            model.track_type,
-            model.going,
+            Race.race_date,
+            Entry.finish_position,
+            Race.distance,
+            Race.track_type,
+            Race.going,
         )
-        .filter(person_id.isnot(None))
+        .join(Race, Race.id == Entry.race_id)
+        .filter(person_id.isnot(None), Entry.finish_position.isnot(None))
         .all()
     )
     if not rows:
@@ -118,11 +125,11 @@ def _load_person_history(session, model, id_column: str) -> dict[str, pd.DataFra
 
 
 def load_jockey_history(session) -> dict[str, pd.DataFrame]:
-    return _load_person_history(session, JockeyResult, "jockey_id")
+    return _load_person_history_from_entries(session, "jockey_id")
 
 
 def load_trainer_history(session) -> dict[str, pd.DataFrame]:
-    return _load_person_history(session, TrainerResult, "trainer_id")
+    return _load_person_history_from_entries(session, "trainer_id")
 
 
 def _empty_features() -> dict[str, float]:

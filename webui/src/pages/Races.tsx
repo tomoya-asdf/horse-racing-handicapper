@@ -184,8 +184,6 @@ function RaceDetailView({ raceId }: { raceId: number }) {
   const sortedEntries = sortEntries(data.entries, sort);
   const collectionFlags: { label: string; done: boolean }[] = [
     { label: "馬成績", done: data.collection_status.horse_results },
-    { label: "騎手成績", done: data.collection_status.jockey_results },
-    { label: "調教師成績", done: data.collection_status.trainer_results },
   ];
 
   return (

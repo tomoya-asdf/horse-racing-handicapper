@@ -10,16 +10,6 @@ const JOB_OPTIONS = [
     label: "馬過去戦績収集",
     description: "出走馬の過去戦績と統計を補完",
   },
-  {
-    name: "collect_jockeys",
-    label: "騎手過去戦績収集",
-    description: "出走騎手の過去戦績を補完",
-  },
-  {
-    name: "collect_trainers",
-    label: "調教師過去戦績収集",
-    description: "出走馬の調教師の過去戦績を補完",
-  },
   { name: "predict", label: "AI予想", description: "未確定レースへ予測スコアを作成" },
   {
     name: "bet_decide",
