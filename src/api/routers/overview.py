@@ -1,0 +1,114 @@
+"""概要ページ用のサマリ API。"""
+
+from fastapi import APIRouter, Request
+from sqlalchemy import func
+
+from src.api.deps import _is_admin_request
+from src.api.serializers import _bet_stats, _iso, _job_to_dict, _model_info
+from src.common import jobs
+from src.common.db import get_session
+from src.common.dynamic_config import get_settings_view
+from src.common.models import (
+    Bet,
+    BettingMode,
+    Entry,
+    HorseResult,
+    JobRun,
+    Prediction,
+    Race,
+    RaceCollectionStatus,
+)
+from src.common.timeutils import now_jst
+
+router = APIRouter()
+
+
+@router.get("/api/overview")
+def overview(request: Request) -> dict:
+    is_admin = _is_admin_request(request)
+    session = get_session()
+    try:
+        race_count = session.query(func.count(Race.id)).scalar() or 0
+        finished_race_count = (
+            session.query(func.count(func.distinct(Entry.race_id)))
+            .filter(Entry.finish_position.isnot(None))
+            .scalar()
+            or 0
+        )
+        horse_result_horse_count = (
+            session.query(func.count(func.distinct(Entry.horse_id)))
+            .join(HorseResult, HorseResult.horse_id == Entry.horse_id)
+            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .scalar()
+            or 0
+        )
+        horse_target_count = (
+            session.query(func.count(func.distinct(Entry.horse_id)))
+            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .scalar()
+            or 0
+        )
+        horse_uncollected_count = max(horse_target_count - horse_result_horse_count, 0)
+        # 戦績収集はレース起点で駆動する(各レースの全出走馬を集め切ったら収集済みに記録)。
+        # 収集対象=全レース、収集済み=RaceCollectionStatus(kind=horse_results)の数。
+        horse_collected_race_count = (
+            session.query(func.count(RaceCollectionStatus.id))
+            .filter(RaceCollectionStatus.kind == "horse_results")
+            .scalar()
+            or 0
+        )
+        last_collected_at = session.query(func.max(Race.created_at)).scalar()
+        upcoming_race_count = (
+            session.query(func.count(Race.id))
+            .filter(Race.start_time.isnot(None), Race.start_time > now_jst())
+            .scalar()
+            or 0
+        )
+        predicted_upcoming_race_count = (
+            session.query(func.count(func.distinct(Prediction.race_id)))
+            .join(Race, Race.id == Prediction.race_id)
+            .filter(Race.start_time.isnot(None), Race.start_time > now_jst())
+            .scalar()
+            or 0
+        )
+
+        modes = {}
+        visible_modes = [BettingMode.SIM.value]
+        if is_admin:
+            visible_modes.append(BettingMode.PROD.value)
+        for mode in visible_modes:
+            bets = session.query(Bet).filter(Bet.mode == mode).all()
+            modes[mode] = _bet_stats(bets)
+
+        latest_jobs = []
+        for job_name in jobs.ALL_JOBS:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.job_name == job_name)
+                .order_by(JobRun.created_at.desc())
+                .first()
+            )
+            if run is not None:
+                latest_jobs.append(_job_to_dict(run))
+        model_info = _model_info(session)
+    finally:
+        session.close()
+
+    return {
+        "model": model_info,
+        "data": {
+            "race_count": race_count,
+            "finished_race_count": finished_race_count,
+            "horse_result_horse_count": horse_result_horse_count,
+            "horse_target_count": horse_target_count,
+            "horse_uncollected_count": horse_uncollected_count,
+            "horse_collected_race_count": horse_collected_race_count,
+            "horse_target_race_count": race_count,
+            "upcoming_race_count": upcoming_race_count,
+            "predicted_upcoming_race_count": predicted_upcoming_race_count,
+            "last_collected_at": _iso(last_collected_at),
+        },
+        "modes": modes,
+        "latest_jobs": latest_jobs,
+        "settings": get_settings_view(include_env=False),
+    }
