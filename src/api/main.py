@@ -722,15 +722,19 @@ def race_detail(request: Request, race_id: int) -> dict:
             raise HTTPException(status_code=404, detail="race not found")
 
         score_map: dict[int, float] = {}
+        # 順位付け用の生スコア(較正前)。等張回帰の較正後スコアは同値に潰れて
+        # 同順位が生じるため、順位は生スコアで決める。生スコアが無い古い予測は
+        # 較正後スコアで代替する。
+        rank_score_map: dict[int, float] = {}
         model_version = None
         if race.predictions:
             latest = max(race.predictions, key=lambda p: p.created_at or datetime.min)
             model_version = latest.model_version
-            score_map = {
-                p.entry_id: p.score
-                for p in race.predictions
-                if p.model_version == model_version
-            }
+            for p in race.predictions:
+                if p.model_version != model_version:
+                    continue
+                score_map[p.entry_id] = p.score
+                rank_score_map[p.entry_id] = p.raw_score if p.raw_score is not None else p.score
         collected_kinds = {
             kind
             for (kind,) in session.query(RaceCollectionStatus.kind).filter(
@@ -743,7 +747,9 @@ def race_detail(request: Request, race_id: int) -> dict:
         visible_bets = [b for b in race.bets if is_admin or b.mode != BettingMode.PROD.value]
         bet_entry_ids = {b.entry_id for b in visible_bets}
         betting_config = load_betting_config()
-        ai_rank_map = _rank_entries(score_map, reverse=True)
+        # AI順位は生スコア(較正前)で決める。較正後スコアは階段状で同値に潰れるため。
+        # 生スコアが同値の馬は同順位とする(競馬の同着に相当。機械的なタイブレークはしない)。
+        ai_rank_map = _rank_entries(rank_score_map, reverse=True)
         value_odds_map = {
             e.id: e.pre_race_odds if e.pre_race_odds is not None else e.odds
             for e in race.entries
@@ -788,9 +794,10 @@ def race_detail(request: Request, race_id: int) -> dict:
             },
         ]
 
+        # 表示順も生スコアで決め、ai_rank と一致させる(同値は同順位=同着)
         ranked_entries = sorted(
             [e for e in race.entries if e.id in score_map],
-            key=lambda e: score_map[e.id],
+            key=lambda e: rank_score_map[e.id],
             reverse=True,
         )
         score_gap = None

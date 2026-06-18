@@ -145,9 +145,11 @@ def build_bet_candidates(
             place_prob = _place_probability(entry_id, probs)
             candidates.append(_candidate(BET_TYPE_PLACE, entry_id, str(entry.horse_number), place_prob, place_odds))
 
+    # 上位候補の選抜は生スコア(較正前)で順序付けし、較正で同値に潰れた馬の
+    # 並びが不定にならないようにする(生スコアが無い古い予測は較正後スコアで代替)。
     ranked = sorted(
         [p for p in predictions if p.entry_id in entry_map],
-        key=lambda p: p.score,
+        key=lambda p: p.raw_score if p.raw_score is not None else p.score,
         reverse=True,
     )[:6]
     for p1, p2 in combinations(ranked, 2):

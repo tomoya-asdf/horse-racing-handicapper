@@ -157,7 +157,8 @@ class Prediction(Base):
     race_id = Column(Integer, ForeignKey("races.id"), nullable=False)
     entry_id = Column(Integer, ForeignKey("entries.id"), nullable=False)
     model_version = Column(String, nullable=False)
-    score = Column(Float, nullable=False)
+    score = Column(Float, nullable=False)  # 較正後の1着確率。期待値計算・確率表示に使う
+    raw_score = Column(Float)  # 較正前の生スコア。レース内の順位付け(同順位回避)に使う
     created_at = Column(DateTime, default=now_jst)
 
     race = relationship("Race", back_populates="predictions")

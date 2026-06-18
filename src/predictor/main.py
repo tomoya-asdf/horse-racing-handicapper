@@ -161,7 +161,7 @@ def _predict_race(
     entries_df = build_entries_frame(
         entries, race, history, sire_map, jockey_history, trainer_history
     )
-    scores = model.predict(model_bundle, build_features(entries_df))
+    raw_scores, scores = model.predict_scores(model_bundle, build_features(entries_df))
 
     predictions = []
     for entry_id, score in scores.items():
@@ -170,6 +170,7 @@ def _predict_race(
             entry_id=int(entry_id),
             model_version=model_bundle["version"],
             score=float(score),
+            raw_score=float(raw_scores[entry_id]),
         )
         session.add(prediction)
         predictions.append(prediction)

@@ -19,18 +19,30 @@ def load_model() -> dict:
     return joblib.load(MODEL_PATH)
 
 
-def predict(model_bundle: dict, features: pd.DataFrame) -> pd.Series:
-    """特徴量から予測スコア(1着になる確率)を算出する。
+def predict_scores(model_bundle: dict, features: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """(生スコア, 較正後スコア) を返す。
 
-    学習時に確率較正器(calibrator)を保存していれば、それを通して期待値計算に
-    使える素直な確率へ補正する(較正は単調変換のためレース内の順位は変わらない)。
+    - 生スコア: LightGBM の predict_proba(1着確率)。ほぼ全馬で異なるため、レース内の
+      **順位付け**はこちらを使うと同順位(タイ)が生じない。
+    - 較正後スコア: 等張回帰の較正器を通した確率。**期待値計算(score×オッズ)や確率表示**
+      に使う。等張回帰は階段状で同値に潰れるため順位付けには不向き。
+
+    較正器が無ければ両者は同じ値になる。
     """
     feature_columns = model_bundle.get("feature_columns", FEATURE_COLUMNS)
     x = features[feature_columns]
-    scores = model_bundle["model"].predict_proba(x)[:, 1]
+    raw = model_bundle["model"].predict_proba(x)[:, 1]
 
     calibrator = model_bundle.get("calibrator")
-    if calibrator is not None:
-        scores = calibrator.predict(scores)
+    calibrated = calibrator.predict(raw) if calibrator is not None else raw
 
-    return pd.Series(scores, index=features.index, name="score")
+    return (
+        pd.Series(raw, index=features.index, name="raw_score"),
+        pd.Series(calibrated, index=features.index, name="score"),
+    )
+
+
+def predict(model_bundle: dict, features: pd.DataFrame) -> pd.Series:
+    """特徴量から予測スコア(較正後の1着確率)を算出する。"""
+    _, calibrated = predict_scores(model_bundle, features)
+    return calibrated
