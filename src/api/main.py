@@ -38,6 +38,7 @@ from src.common.models import (
     HorsePedigree,
     HorseResult,
     JobRun,
+    KaisaiDate,
     ModelVersion,
     Prediction,
     Race,
@@ -668,6 +669,37 @@ def list_races(
         "offset": page_offset,
         "venues": venues,
     }
+
+
+@app.get("/api/race-dates")
+def race_dates() -> dict:
+    """カレンダー表示用の日付一覧を返す。
+
+    - ``collected``: レースデータが存在する日(収集済み)
+    - ``scheduled``: netkeibaの開催カレンダー上の開催日(``kaisai_dates``)
+
+    レース一覧画面のカレンダーで、収集済み(色付け)と「開催予定だが未収集」
+    (別色)を区別するために両方返す。
+    """
+    session = get_session()
+    try:
+        collected = [
+            row[0].isoformat()
+            for row in session.query(Race.race_date)
+            .filter(Race.race_date.isnot(None))
+            .distinct()
+            .order_by(Race.race_date)
+            .all()
+        ]
+        scheduled = [
+            row[0].isoformat()
+            for row in session.query(KaisaiDate.kaisai_date)
+            .order_by(KaisaiDate.kaisai_date)
+            .all()
+        ]
+        return {"collected": collected, "scheduled": scheduled}
+    finally:
+        session.close()
 
 
 @app.get("/api/races/{race_id}")

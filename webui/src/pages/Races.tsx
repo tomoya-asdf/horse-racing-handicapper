@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { getJSON, formatDate, formatFullDateTime } from "../api";
 import { ErrorNote, ModeBadge, StatusBadge, usePolling } from "../components";
+import { RaceDateField } from "../RaceDateField";
 import type { RaceBetCandidate, RaceDetail, RaceEntry, RaceSummary, RacesResponse } from "../types";
 
 const PAGE_SIZE = 50;
@@ -559,14 +560,13 @@ export default function RacesPage() {
               placeholder="レース名で検索"
             />
           </label>
-          <label>
+          <div className="race-filter-field">
             <span>日付</span>
-            <input
-              type="date"
+            <RaceDateField
               value={filters.race_date}
-              onChange={(e) => updateFilter("race_date", e.target.value)}
+              onChange={(value) => updateFilter("race_date", value)}
             />
-          </label>
+          </div>
           <label>
             <span>R</span>
             <select

@@ -304,6 +304,20 @@ class HorsePedigree(Base):
     created_at = Column(DateTime, default=now_jst)
 
 
+class KaisaiDate(Base):
+    """netkeibaの開催カレンダー(JRA開催日)。
+
+    ``top/calendar.html`` から取得した開催予定日を保存する。レース一覧画面の
+    カレンダーで「開催日だが未収集」の日を判別するために使う(収集済みかどうかは
+    ``races`` の有無で判定する)。1行=1開催日。
+    """
+
+    __tablename__ = "kaisai_dates"
+
+    kaisai_date = Column(Date, primary_key=True)
+    fetched_at = Column(DateTime, default=now_jst, onupdate=now_jst)
+
+
 class RaceOdds(Base):
     __tablename__ = "race_odds"
     __table_args__ = (

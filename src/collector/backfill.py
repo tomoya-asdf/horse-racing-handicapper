@@ -5,7 +5,7 @@ import sys
 from datetime import date, datetime, timedelta
 
 from src.collector import scraper
-from src.collector.main import _upsert_races
+from src.collector.main import _upsert_races, collect_kaisai_dates
 from src.common.db import get_session, init_db
 from src.common.models import Race
 from src.common.timeutils import now_jst
@@ -48,10 +48,15 @@ def _apply_results(start: date, end: date) -> int:
 
 
 def backfill(start: date, end: date) -> str:
+    # 開催カレンダーを先に取得・保存し、開催日にだけ出馬表・結果を取りに行く。
+    # 長期間のバックフィルでは開催の無い平日への無駄なリクエストを大幅に削減できる。
+    kaisai = collect_kaisai_dates(start, end)
     total = 0
     updated = 0
     for offset in range((end - start).days + 1):
         target = start + timedelta(days=offset)
+        if target not in kaisai:
+            continue
         races = scraper.fetch_upcoming_races(target, include_started=True)
         _upsert_races(races)
         total += len(races)
@@ -59,7 +64,7 @@ def backfill(start: date, end: date) -> str:
         updated += daily_updated
         logger.info("%s: %d races collected, %d results applied", target, len(races), daily_updated)
 
-    return f"取得レース={total}件({start}〜{end}), 結果反映={updated}件"
+    return f"取得レース={total}件({start}〜{end}, 開催{len(kaisai)}日), 結果反映={updated}件"
 
 
 def main() -> None:

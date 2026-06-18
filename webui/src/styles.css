@@ -1082,13 +1082,15 @@ h2 {
   order: 10;
 }
 
-.race-filters label {
+.race-filters label,
+.race-filters .race-filter-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.race-filters label span {
+.race-filters label span,
+.race-filters .race-filter-field > span {
   color: var(--text-muted);
   font-size: 12px;
 }
@@ -1108,6 +1110,171 @@ h2 {
 .race-filters select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* 日付カレンダー(レース一覧の日付フィルタ) */
+.race-date-field {
+  position: relative;
+}
+
+.race-date-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.race-date-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.race-date-input:focus,
+.race-date-input:hover {
+  border-color: var(--accent);
+}
+
+.race-date-clear {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  padding: 6px 9px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.race-date-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.race-date-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 252px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.race-date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.race-date-nav span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.race-date-nav button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.race-date-nav button:hover {
+  border-color: var(--accent);
+}
+
+.race-date-weekdays,
+.race-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.race-date-weekdays {
+  margin-bottom: 2px;
+}
+
+.race-date-weekdays span {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.race-date-cell {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.race-date-cell.empty {
+  cursor: default;
+}
+
+.race-date-cell:not(.empty):hover {
+  border-color: var(--accent);
+}
+
+/* レースデータが存在する日 */
+.race-date-cell.has-data {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* netkeibaカレンダー上は開催日だが、まだ収集していない日(赤文字) */
+.race-date-cell.scheduled-only {
+  color: #e5484d;
+  font-weight: 700;
+  border-color: color-mix(in srgb, #e5484d 45%, transparent);
+}
+
+.race-date-cell.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 選択中は文字色を白に統一(未収集の赤より選択状態を優先) */
+.race-date-cell.scheduled-only.selected {
+  color: #fff;
+}
+
+.race-date-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.race-date-legend .legend-swatch {
+  width: 16px;
+  height: 16px;
+  aspect-ratio: auto;
+  cursor: default;
+  flex: 0 0 auto;
 }
 
 /* 賭け履歴 */
