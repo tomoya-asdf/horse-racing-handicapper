@@ -17,7 +17,7 @@
 src/common/      DBモデル、設定、ジョブ管理
 src/collector/   スクレイピング、データ収集、過去データ補完
 src/predictor/   特徴量生成、学習、予測、買い目判定、バックテスト
-src/api/         FastAPI と Web UI 用 API
+src/api/         Web UI 用 API
 webui/           React フロントエンド
 docker/          各サービスの Dockerfile
 docs/            設計ドキュメント
