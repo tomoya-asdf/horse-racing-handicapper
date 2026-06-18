@@ -168,7 +168,13 @@ export default function OverviewPage({ auth }: { auth: AuthStatus | null }) {
       </section>
 
       <section className="overview-section">
-        <h2>戦績データ</h2>
+        <h2>
+          戦績データ{" "}
+          <span className="section-subcount">
+            (収集済み {data.data.horse_collected_race_count.toLocaleString()} /{" "}
+            {data.data.horse_target_race_count.toLocaleString()} レース)
+          </span>
+        </h2>
         <div className="card-grid">
         <DataCard
           title="馬の戦績"

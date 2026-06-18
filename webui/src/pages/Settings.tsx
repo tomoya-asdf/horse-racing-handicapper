@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatDateTime, getJSON, postJSON, putJSON } from "../api";
-import { ErrorNote, Toast } from "../components";
-import type { ModelParamKey, ScheduledJobSetting, SettingsView } from "../types";
+import { ErrorNote, Toast, usePolling } from "../components";
+import type { ModelParamKey, ScheduledJobSetting, SettingsView, SystemVersion } from "../types";
 
 type ScheduleForm = Record<string, string | boolean>;
 type ModelForm = Record<string, string>;
@@ -251,6 +251,25 @@ export default function SettingsPage() {
     try {
       await postJSON("/api/system/restart");
       setMessage("再起動を依頼しました。数十秒後に画面を再読み込みしてください。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // バージョン/更新状態。デプロイ進捗を追うため短い間隔でポーリングする。
+  const { data: version } = usePolling<SystemVersion>(() => getJSON("/api/system/version"), 5000);
+
+  const deploySystem = async () => {
+    setError(null);
+    setMessage(null);
+    const ok = window.confirm(
+      "最新版を取得してビルド・再起動します(ホストのデプロイエージェントが実行)。" +
+        "数分かかり、途中で一時的に画面へ接続できなくなることがあります。実行しますか?"
+    );
+    if (!ok) return;
+    try {
+      await postJSON("/api/system/deploy");
+      setMessage("デプロイを依頼しました。進捗はこの画面に表示されます。");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -565,6 +584,62 @@ export default function SettingsPage() {
           </table>
         </details>
       )}
+
+      <section className="settings-deploy-section">
+        <h2>
+          ソフトウェア更新
+          {version?.update_available && <span className="update-badge">更新あり</span>}
+        </h2>
+        {!version?.available ? (
+          <p className="muted">
+            デプロイエージェントが未検出です。ホストで{" "}
+            <code>scripts/deploy_agent.sh</code>(Linux)または{" "}
+            <code>scripts/deploy_agent.ps1</code>(Windows)を起動すると、
+            現在のバージョンと更新有無が表示されます。
+          </p>
+        ) : (
+          <>
+            <table className="table deploy-status-table">
+              <tbody>
+                <tr>
+                  <td>稼働中バージョン</td>
+                  <td>
+                    {version.current_sha ?? "-"}
+                    {version.current_ref ? ` (${version.current_ref})` : ""}
+                  </td>
+                </tr>
+                <tr>
+                  <td>最新バージョン</td>
+                  <td>
+                    {version.remote_sha ?? "-"}
+                    {version.update_available ? " — 更新あり" : " — 最新です"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>更新確認</td>
+                  <td>{formatDateTime(version.last_checked_at)}</td>
+                </tr>
+                <tr>
+                  <td>デプロイ状態</td>
+                  <td>
+                    {version.state ?? "-"}
+                    {version.last_deploy_at ? ` / 最終: ${formatDateTime(version.last_deploy_at)}` : ""}
+                    {version.last_deploy_result ? ` (${version.last_deploy_result})` : ""}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {version.message && <pre className="deploy-log">{version.message}</pre>}
+            <button
+              className="secondary danger-outline"
+              disabled={version.state === "requested" || version.state === "running"}
+              onClick={() => void deploySystem()}
+            >
+              {version.state === "running" ? "デプロイ中..." : "アップデートを実行"}
+            </button>
+          </>
+        )}
+      </section>
 
       <section className="danger-zone settings-restart-section">
         <div>

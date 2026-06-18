@@ -169,6 +169,20 @@ export interface EnvSetting {
   secret?: boolean;
 }
 
+export interface SystemVersion {
+  available: boolean;
+  current_sha: string | null;
+  current_ref: string | null;
+  remote_sha: string | null;
+  update_available: boolean;
+  last_checked_at: string | null;
+  state: string | null;
+  last_deploy_at: string | null;
+  last_deploy_result: string | null;
+  message: string | null;
+  agent_seen_at: string | null;
+}
+
 export interface Overview {
   model: { trained: boolean; version: string | null; trained_at: string | null };
   data: {
@@ -177,6 +191,8 @@ export interface Overview {
     horse_result_horse_count: number;
     horse_target_count: number;
     horse_uncollected_count: number;
+    horse_collected_race_count: number;
+    horse_target_race_count: number;
     upcoming_race_count: number;
     predicted_upcoming_race_count: number;
     last_collected_at: string | null;

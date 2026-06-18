@@ -38,6 +38,7 @@ from src.common.models import (
     HorsePedigree,
     HorseResult,
     JobRun,
+    JobStatus,
     KaisaiDate,
     ModelVersion,
     Prediction,
@@ -362,6 +363,14 @@ def overview(request: Request) -> dict:
             or 0
         )
         horse_uncollected_count = max(horse_target_count - horse_result_horse_count, 0)
+        # 戦績収集はレース起点で駆動する(各レースの全出走馬を集め切ったら収集済みに記録)。
+        # 収集対象=全レース、収集済み=RaceCollectionStatus(kind=horse_results)の数。
+        horse_collected_race_count = (
+            session.query(func.count(RaceCollectionStatus.id))
+            .filter(RaceCollectionStatus.kind == "horse_results")
+            .scalar()
+            or 0
+        )
         last_collected_at = session.query(func.max(Race.created_at)).scalar()
         upcoming_race_count = (
             session.query(func.count(Race.id))
@@ -407,6 +416,8 @@ def overview(request: Request) -> dict:
             "horse_result_horse_count": horse_result_horse_count,
             "horse_target_count": horse_target_count,
             "horse_uncollected_count": horse_uncollected_count,
+            "horse_collected_race_count": horse_collected_race_count,
+            "horse_target_race_count": race_count,
             "upcoming_race_count": upcoming_race_count,
             "predicted_upcoming_race_count": predicted_upcoming_race_count,
             "last_collected_at": _iso(last_collected_at),
@@ -1356,6 +1367,91 @@ def restart_system() -> dict:
     if result.returncode != 0:
         raise HTTPException(status_code=500, detail=(result.stderr or result.stdout or "restart failed")[:1000])
     return {"restarted": True, "detail": result.stdout}
+
+
+# アップデート/デプロイは webui コンテナからは行わず、ホスト側の常駐エージェント
+# (scripts/deploy_agent.ps1)が担当する。両者は共有ボリューム ./data 上の JSON で
+# やりとりする(webui に docker.sock を渡さないための分離)。
+#   - deploy_status.json : エージェントが書き込む現在の状態(バージョン/更新有無/進捗)
+#   - deploy_request.json: webui が書き込むデプロイ依頼。エージェントが処理後に削除する
+_DEPLOY_STATUS_FILE = Path("/app/data/deploy_status.json")
+_DEPLOY_REQUEST_FILE = Path("/app/data/deploy_request.json")
+
+
+def _read_deploy_status() -> dict:
+    # PowerShell(Windowsホスト)が書く状態ファイルはBOM付きUTF-8になりうるため
+    # utf-8-sig で読み、BOMがあっても無くても解釈できるようにする
+    try:
+        return json.loads(_DEPLOY_STATUS_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+
+
+@app.get("/api/system/version")
+def system_version() -> dict:
+    """稼働中バージョン・更新有無・デプロイ進捗を返す(ホストエージェントが書く状態ファイル)。"""
+    status = _read_deploy_status()
+    return {
+        "available": bool(status),  # エージェントが状態を書けているか
+        "current_sha": status.get("current_sha"),
+        "current_ref": status.get("current_ref"),
+        "remote_sha": status.get("remote_sha"),
+        "update_available": bool(status.get("update_available")),
+        "last_checked_at": status.get("last_checked_at"),
+        "state": status.get("state"),  # idle / requested / running / success / failed
+        "last_deploy_at": status.get("last_deploy_at"),
+        "last_deploy_result": status.get("last_deploy_result"),
+        "message": status.get("message"),
+        "agent_seen_at": status.get("agent_seen_at"),
+    }
+
+
+@app.post("/api/system/deploy", dependencies=[Depends(require_admin)])
+def request_deploy() -> dict:
+    """デプロイ(git pull + build + 再起動)をホストエージェントへ依頼する。
+
+    実行自体はエージェントが行う。実弾投票を中断しないよう、bet_decide / settle が
+    実行中のときは依頼を拒否する。
+    """
+    session = get_session()
+    try:
+        busy = (
+            session.query(JobRun.id)
+            .filter(
+                JobRun.job_name.in_([jobs.BET_DECIDE, jobs.SETTLE]),
+                JobRun.status == JobStatus.RUNNING.value,
+            )
+            .first()
+        )
+    finally:
+        session.close()
+    if busy is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="買い目判定/精算ジョブの実行中はデプロイできません。完了後に再度お試しください。",
+        )
+
+    status = _read_deploy_status()
+    if status.get("state") in ("requested", "running"):
+        raise HTTPException(status_code=409, detail="すでにデプロイ依頼を処理中です。")
+    if not status:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "デプロイエージェントが検出できません(状態ファイルがありません)。"
+                "ホスト側でデプロイエージェントを起動してください"
+                "(Linux: scripts/deploy_agent.sh / Windows: scripts/deploy_agent.ps1)。"
+            ),
+        )
+
+    try:
+        _DEPLOY_REQUEST_FILE.write_text(
+            json.dumps({"requested_at": now_jst().isoformat()}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"デプロイ依頼の書き込みに失敗しました: {exc}")
+    return {"requested": True}
 
 
 @app.get("/api/settings", dependencies=[Depends(require_admin)])

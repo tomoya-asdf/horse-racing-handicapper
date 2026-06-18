@@ -140,6 +140,47 @@ h2 {
   padding-bottom: 6px;
 }
 
+.section-subcount {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.settings-deploy-section {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.update-badge {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #e5484d;
+  border-radius: 10px;
+  padding: 2px 9px;
+  vertical-align: middle;
+}
+
+.deploy-status-table td:first-child {
+  color: var(--text-muted);
+  width: 38%;
+  white-space: nowrap;
+}
+
+.deploy-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 8px 0;
+}
+
 .section-header-row {
   display: flex;
   align-items: center;
