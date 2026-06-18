@@ -5,7 +5,8 @@ import sys
 from datetime import date, datetime, timedelta
 
 from src.collector import scraper
-from src.collector.main import _upsert_races, collect_kaisai_dates
+from src.collector.calendar_store import collect_kaisai_dates
+from src.collector.races_store import _upsert_races
 from src.common.db import get_session, init_db
 from src.common.models import Race
 from src.common.timeutils import now_jst
