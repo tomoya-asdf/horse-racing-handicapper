@@ -165,6 +165,7 @@ export function LatestJobsTable({ jobs }: { jobs: JobRun[] }) {
 
 export function JobHistoryTable({
   jobs,
+  total,
   page,
   openJobId,
   error,
@@ -173,6 +174,7 @@ export function JobHistoryTable({
   onPageChange,
 }: {
   jobs: JobRun[];
+  total: number;
   page: number;
   openJobId: number | null;
   error: string | null;
@@ -180,8 +182,9 @@ export function JobHistoryTable({
   onStop: (id: number) => void;
   onPageChange: (page: number) => void;
 }) {
-  const pageCount = Math.max(1, Math.ceil(jobs.length / HISTORY_PAGE_SIZE));
-  const visible = jobs.slice(page * HISTORY_PAGE_SIZE, (page + 1) * HISTORY_PAGE_SIZE);
+  // jobs はサーバー側で1ページ分(offset/limit)取得済み。総数 total からページ数を出す。
+  const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+  const visible = jobs;
   return (
     <>
       <h2>実行履歴</h2>
@@ -257,7 +260,7 @@ export function JobHistoryTable({
         page={page}
         pageCount={pageCount}
         pageSize={HISTORY_PAGE_SIZE}
-        total={jobs.length}
+        total={total}
         onPageChange={onPageChange}
       />
     </>

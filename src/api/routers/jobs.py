@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 
 from src.api.deps import BACKFILL_MAX_DAYS, JOB_LABELS, require_admin
 from src.api.serializers import _job_to_dict, _reservation_to_dict
@@ -16,13 +17,17 @@ router = APIRouter()
 
 
 @router.get("/api/jobs", dependencies=[Depends(require_admin)])
-def list_jobs(limit: int = 50) -> dict:
+def list_jobs(limit: int = 50, offset: int = 0) -> dict:
+    page_limit = min(max(limit, 1), 200)
+    page_offset = max(offset, 0)
     session = get_session()
     try:
+        jobs_total = session.query(func.count(JobRun.id)).scalar() or 0
         runs = (
             session.query(JobRun)
-            .order_by(JobRun.created_at.desc())
-            .limit(min(limit, 200))
+            .order_by(JobRun.created_at.desc().nullslast(), JobRun.id.desc())
+            .offset(page_offset)
+            .limit(page_limit)
             .all()
         )
         latest_jobs = []
@@ -37,6 +42,7 @@ def list_jobs(limit: int = 50) -> dict:
                 latest_jobs.append(_job_to_dict(run))
         return {
             "jobs": [_job_to_dict(run) for run in runs],
+            "jobs_total": jobs_total,
             "latest_jobs": latest_jobs,
             "scheduled_jobs": scheduled_jobs_view(),
             "reservations": [

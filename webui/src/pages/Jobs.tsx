@@ -3,6 +3,7 @@ import { getJSON, postJSON } from "../api";
 import { ErrorNote, usePolling } from "../components";
 import type { JobsResponse } from "../types";
 import {
+  HISTORY_PAGE_SIZE,
   JOB_BUTTONS,
   JOB_OPTIONS,
   RANGE_JOB_NAMES,
@@ -15,7 +16,15 @@ import {
 import { JobHistoryTable, LatestJobsTable, ReservationsTable } from "./jobs/JobTables";
 
 export default function JobsPage() {
-  const { data, error } = usePolling<JobsResponse>(() => getJSON("/api/jobs?limit=50"), 5000);
+  const [historyPage, setHistoryPage] = useState(0);
+  const { data, error } = usePolling<JobsResponse>(
+    () =>
+      getJSON(
+        `/api/jobs?limit=${HISTORY_PAGE_SIZE}&offset=${historyPage * HISTORY_PAGE_SIZE}`
+      ),
+    5000,
+    [historyPage]
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [openJobId, setOpenJobId] = useState<number | null>(null);
@@ -28,7 +37,6 @@ export default function JobsPage() {
   const [reservationStart, setReservationStart] = useState(isoDaysAgo(14));
   const [reservationEnd, setReservationEnd] = useState(isoDaysAgo(1));
   const [reservationPage, setReservationPage] = useState(0);
-  const [historyPage, setHistoryPage] = useState(0);
   const [longBackfillStartMonth, setLongBackfillStartMonth] = useState(isoMonthsAgo(24));
   const [longBackfillEndMonth, setLongBackfillEndMonth] = useState(isoMonthsAgo(0));
   const [longBackfillRunAt, setLongBackfillRunAt] = useState(localDateTimeIn(10));
@@ -359,6 +367,7 @@ export default function JobsPage() {
 
       <JobHistoryTable
         jobs={historyJobs}
+        total={data?.jobs_total ?? 0}
         page={historyPage}
         openJobId={openJobId}
         error={error}

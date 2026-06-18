@@ -12,7 +12,7 @@ from src.common.models import (
     Bet,
     BettingMode,
     Entry,
-    HorseResult,
+    Horse,
     JobRun,
     Prediction,
     Race,
@@ -35,10 +35,17 @@ def overview(request: Request) -> dict:
             .scalar()
             or 0
         )
+        # 「収集済み」は過去成績テーブルの行有無ではなく Horse.results_fetched_at で判定する。
+        # 新馬(過去走ゼロ)は horse_results 行を持たないため、行有無で数えると常に未収集に
+        # 数えられてしまう。取得処理が走った馬(results_fetched_at が入っている)を収集済みとする。
         horse_result_horse_count = (
             session.query(func.count(func.distinct(Entry.horse_id)))
-            .join(HorseResult, HorseResult.horse_id == Entry.horse_id)
-            .filter(Entry.horse_id.isnot(None), Entry.horse_id != "")
+            .join(Horse, Horse.horse_id == Entry.horse_id)
+            .filter(
+                Entry.horse_id.isnot(None),
+                Entry.horse_id != "",
+                Horse.results_fetched_at.isnot(None),
+            )
             .scalar()
             or 0
         )

@@ -49,6 +49,7 @@ export interface JobReservation {
 
 export interface JobsResponse {
   jobs: JobRun[];
+  jobs_total: number;
   latest_jobs: JobRun[];
   scheduled_jobs: ScheduledJobSetting[];
   reservations: JobReservation[];

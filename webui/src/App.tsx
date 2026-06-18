@@ -13,14 +13,22 @@ import ModelPage from "./pages/Model";
 import type { AuthStatus } from "./types";
 
 const TABS = [
-  { id: "overview", label: "概要", adminOnly: false },
-  { id: "races", label: "レース", adminOnly: false },
-  { id: "bets", label: "賭け履歴", adminOnly: false },
-  { id: "jobs", label: "ジョブ", adminOnly: true },
-  { id: "settings", label: "設定", adminOnly: true },
+  { id: "overview", label: "概要", adminOnly: false, path: "/overview" },
+  { id: "races", label: "レース", adminOnly: false, path: "/races" },
+  { id: "bets", label: "賭け履歴", adminOnly: false, path: "/bets" },
+  { id: "jobs", label: "ジョブ", adminOnly: true, path: "/jobs" },
+  { id: "settings", label: "設定", adminOnly: true, path: "/settings" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
+
+const LOGIN_PATH = "/login";
+
+function pathToTab(path: string): TabId | null {
+  if (path === "/") return "overview";
+  const match = TABS.find((t) => t.path === path);
+  return match ? match.id : null;
+}
 
 function LoginPage({
   auth,
@@ -86,22 +94,40 @@ function LoginPage({
 }
 
 export default function App() {
-  const [tab, setTab] = useState<TabId>("overview");
+  const [path, setPath] = useState(() => window.location.pathname);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
-  const [showLogin, setShowLogin] = useState(false);
-  const horseMatch = window.location.pathname.match(/^\/horses\/([^/]+)$/);
+  const horseMatch = path.match(/^\/horses\/([^/]+)$/);
   const horseId = horseMatch ? decodeURIComponent(horseMatch[1]) : null;
-  const jockeyMatch = window.location.pathname.match(/^\/jockeys\/([^/]+)$/);
+  const jockeyMatch = path.match(/^\/jockeys\/([^/]+)$/);
   const jockeyId = jockeyMatch ? decodeURIComponent(jockeyMatch[1]) : null;
-  const trainerMatch = window.location.pathname.match(/^\/trainers\/([^/]+)$/);
+  const trainerMatch = path.match(/^\/trainers\/([^/]+)$/);
   const trainerId = trainerMatch ? decodeURIComponent(trainerMatch[1]) : null;
-  const modelMatch = window.location.pathname.match(/^\/models\/([^/]+)$/);
+  const modelMatch = path.match(/^\/models\/([^/]+)$/);
   const modelVersion = modelMatch ? decodeURIComponent(modelMatch[1]) : null;
-  const modelsListOpen = window.location.pathname === "/models";
+  const modelsListOpen = path === "/models";
   const detailPageOpen = Boolean(
     horseId || jockeyId || trainerId || modelVersion || modelsListOpen
   );
   const visibleTabs = TABS.filter((t) => !t.adminOnly || auth?.authenticated);
+  const requestedTab = pathToTab(path);
+  // 認証が必要なタブに未ログインでアクセスした場合は概要にフォールバックする。
+  const tab: TabId =
+    requestedTab && visibleTabs.some((t) => t.id === requestedTab) ? requestedTab : "overview";
+  const showLogin = path === LOGIN_PATH;
+
+  // ブラウザの戻る/進むで URL が変わったら表示を追従させる。
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const navigate = (to: string) => {
+    if (window.location.pathname !== to) {
+      window.history.pushState({}, "", to);
+    }
+    setPath(to);
+  };
 
   useEffect(() => {
     getJSON<AuthStatus>("/api/auth/status")
@@ -109,24 +135,17 @@ export default function App() {
       .catch(() => setAuth({ configured: false, authenticated: false }));
   }, []);
 
-  useEffect(() => {
-    if (!visibleTabs.some((t) => t.id === tab)) {
-      setTab("overview");
-    }
-  }, [tab, visibleTabs]);
-
   const logout = async () => {
     await postJSON("/api/auth/logout");
     setAuth({ configured: auth?.configured ?? true, authenticated: false });
-    setShowLogin(false);
-    if (tab === "jobs" || tab === "settings") {
-      setTab("overview");
+    if (tab === "jobs" || tab === "settings" || showLogin) {
+      navigate("/overview");
     }
   };
 
   const selectTab = (nextTab: TabId) => {
-    setShowLogin(false);
-    setTab(nextTab);
+    const target = TABS.find((t) => t.id === nextTab);
+    navigate(target ? target.path : "/overview");
   };
 
   return (
@@ -156,7 +175,7 @@ export default function App() {
             ) : (
               <button
                 className={`auth-button auth-button-login ${showLogin ? "active" : ""}`}
-                onClick={() => setShowLogin(true)}
+                onClick={() => navigate(LOGIN_PATH)}
               >
                 ログイン
               </button>
@@ -170,7 +189,7 @@ export default function App() {
             auth={auth}
             onLogin={(nextAuth) => {
               setAuth(nextAuth);
-              setShowLogin(false);
+              navigate("/overview");
             }}
           />
         )}

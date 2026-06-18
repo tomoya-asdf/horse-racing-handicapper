@@ -65,6 +65,16 @@ if WEBUI_DIST.exists():
     def index() -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
 
+    # メインタブ・ログインの直リンク/リロード用(SPAなので中身はindex.htmlを返す)。
+    @app.get("/overview")
+    @app.get("/races")
+    @app.get("/bets")
+    @app.get("/jobs")
+    @app.get("/settings")
+    @app.get("/login")
+    def spa_page() -> FileResponse:
+        return FileResponse(WEBUI_DIST / "index.html")
+
     @app.get("/horses/{horse_id}")
     def horse_page(horse_id: str) -> FileResponse:
         return FileResponse(WEBUI_DIST / "index.html")
