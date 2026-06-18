@@ -1,150 +1,18 @@
-import { Fragment, useState } from "react";
-import { formatDateTime, getJSON, postJSON } from "../api";
-import { ErrorNote, StatusBadge, usePolling } from "../components";
+import { useState } from "react";
+import { getJSON, postJSON } from "../api";
+import { ErrorNote, usePolling } from "../components";
 import type { JobsResponse } from "../types";
-
-const JOB_OPTIONS = [
-  { name: "collect", label: "データ収集", description: "レース、出馬表、オッズ、結果を取得" },
-  {
-    name: "collect_horses",
-    label: "馬過去戦績収集",
-    description: "出走馬の過去戦績と統計を補完",
-  },
-  { name: "predict", label: "AI予想", description: "未確定レースへ予測スコアを作成" },
-  {
-    name: "bet_decide",
-    label: "賭け対象決定",
-    description: "予測と最新オッズから買い目を判定",
-  },
-  { name: "settle", label: "決済", description: "確定済みレースの払戻を反映" },
-  { name: "train", label: "モデル学習", description: "蓄積データからモデルを再学習" },
-  {
-    name: "backfill",
-    label: "過去データ取得",
-    description: "指定期間の過去レースをまとめて取得",
-  },
-  {
-    name: "backtest",
-    label: "回収率バックテスト",
-    description: "指定期間で予想、賭け、決済をシミュレート",
-  },
-];
-
-const JOB_BUTTONS = JOB_OPTIONS.filter((job) => job.name !== "backfill" && job.name !== "backtest");
-const RANGE_JOB_NAMES = new Set(["backfill", "backtest"]);
-const BACKFILL_MAX_DAYS = 31;
-const RESERVATION_PAGE_SIZE = 5;
-const HISTORY_PAGE_SIZE = 15;
-
-function isoDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
-}
-
-function isoMonthsAgo(months: number): string {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() - months);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yyyy}-${mm}`;
-}
-
-function localDateTimeIn(minutes: number): string {
-  const d = new Date(Date.now() + minutes * 60 * 1000);
-  return formatLocalDateTime(d);
-}
-
-function formatLocalDate(d: Date): string {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatLocalDateTime(d: Date): string {
-  d.setSeconds(0, 0);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
-}
-
-function addDays(d: Date, days: number): Date {
-  const next = new Date(d);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function addMinutesToLocalDateTime(value: string, minutes: number): string {
-  const [datePart, timePart] = value.split("T");
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [hour, minute] = timePart.split(":").map(Number);
-  const d = new Date(year, month - 1, day, hour, minute + minutes);
-  return formatLocalDateTime(d);
-}
-
-function buildLongBackfillChunks(
-  startMonth: string,
-  endMonth: string
-): { start_date: string; end_date: string }[] {
-  const [sy, sm] = startMonth.split("-").map(Number);
-  const [ey, em] = endMonth.split("-").map(Number);
-  if (!sy || !sm || !ey || !em) return [];
-
-  const start = new Date(sy, sm - 1, 1);
-  start.setHours(0, 0, 0, 0);
-  // 終了月の末日(翌月0日 = 当月末日)
-  let end = new Date(ey, em, 0);
-  end.setHours(0, 0, 0, 0);
-  // 未来日を取得しないよう前日までに丸める
-  const yesterday = new Date();
-  yesterday.setHours(0, 0, 0, 0);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (end > yesterday) end = yesterday;
-  if (start > end) return [];
-
-  const chunks: { start_date: string; end_date: string }[] = [];
-  let current = start;
-  while (current <= end) {
-    const chunkEnd = addDays(current, BACKFILL_MAX_DAYS - 1);
-    const safeEnd = chunkEnd > end ? end : chunkEnd;
-    chunks.push({ start_date: formatLocalDate(current), end_date: formatLocalDate(safeEnd) });
-    current = addDays(safeEnd, 1);
-  }
-  return chunks;
-}
-
-function triggerLabel(trigger: string): string {
-  if (trigger === "manual") return "手動";
-  if (trigger === "reserved") return "予約";
-  return "スケジュール";
-}
-
-function reservationStatusLabel(status: string): string {
-  if (status === "pending") return "予約中";
-  if (status === "queued") return "投入済み";
-  if (status === "cancelled") return "キャンセル";
-  return status;
-}
-
-function formatParams(raw: string | null): string {
-  if (!raw) return "-";
-  try {
-    const params = JSON.parse(raw);
-    if (params && typeof params === "object") {
-      const start = "start_date" in params ? String(params.start_date) : null;
-      const end = "end_date" in params ? String(params.end_date) : null;
-      if (start && end) return `${start} - ${end}`;
-    }
-  } catch {
-    /* raw text fallback */
-  }
-  return raw;
-}
+import {
+  JOB_BUTTONS,
+  JOB_OPTIONS,
+  RANGE_JOB_NAMES,
+  addMinutesToLocalDateTime,
+  buildLongBackfillChunks,
+  isoDaysAgo,
+  isoMonthsAgo,
+  localDateTimeIn,
+} from "./jobs/helpers";
+import { JobHistoryTable, LatestJobsTable, ReservationsTable } from "./jobs/JobTables";
 
 export default function JobsPage() {
   const { data, error } = usePolling<JobsResponse>(() => getJSON("/api/jobs?limit=50"), 5000);
@@ -182,16 +50,6 @@ export default function JobsPage() {
     (reservation) => reservation.status !== "cancelled"
   );
   const historyJobs = data?.jobs ?? [];
-  const reservationPageCount = Math.max(1, Math.ceil(reservations.length / RESERVATION_PAGE_SIZE));
-  const historyPageCount = Math.max(1, Math.ceil(historyJobs.length / HISTORY_PAGE_SIZE));
-  const visibleReservations = reservations.slice(
-    reservationPage * RESERVATION_PAGE_SIZE,
-    (reservationPage + 1) * RESERVATION_PAGE_SIZE
-  );
-  const visibleHistoryJobs = historyJobs.slice(
-    historyPage * HISTORY_PAGE_SIZE,
-    (historyPage + 1) * HISTORY_PAGE_SIZE
-  );
 
   const runJob = async (name: string, label: string, body?: unknown) => {
     setMessage(null);
@@ -490,215 +348,27 @@ export default function JobsPage() {
       {message && <div className="info-note">{message}</div>}
       <ErrorNote message={actionError} />
 
-      <h2>予約一覧</h2>
-      <table className="table latest-jobs-table">
-        <thead>
-          <tr>
-            <th>実行予定</th>
-            <th>ジョブ</th>
-            <th>状態</th>
-            <th>パラメータ</th>
-            <th>登録</th>
-            <th>投入ID</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {reservations.length === 0 && (
-            <tr>
-              <td colSpan={7} className="muted">
-                予約はありません
-              </td>
-            </tr>
-          )}
-          {visibleReservations.map((reservation) => (
-            <tr key={reservation.id}>
-              <td>{formatDateTime(reservation.run_at)}</td>
-              <td>{reservation.label}</td>
-              <td>
-                <span className={`badge badge-${reservation.status}`}>
-                  {reservationStatusLabel(reservation.status)}
-                </span>
-              </td>
-              <td className="detail-cell">{formatParams(reservation.params)}</td>
-              <td>{formatDateTime(reservation.created_at)}</td>
-              <td>{reservation.queued_run_id ?? "-"}</td>
-              <td>
-                {reservation.status === "pending" ? (
-                  <button
-                    className="secondary danger-outline"
-                    onClick={() => void cancelReservation(reservation.id)}
-                  >
-                    キャンセル
-                  </button>
-                ) : (
-                  "-"
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <TablePager
+      <ReservationsTable
+        reservations={reservations}
         page={reservationPage}
-        pageCount={reservationPageCount}
-        pageSize={RESERVATION_PAGE_SIZE}
-        total={reservations.length}
         onPageChange={setReservationPage}
+        onCancel={(id) => void cancelReservation(id)}
       />
 
-      <h2>ジョブの最終実行</h2>
-      <table className="table latest-jobs-table">
-        <thead>
-          <tr>
-            <th>ジョブ</th>
-            <th>状態</th>
-            <th>実行種別</th>
-            <th>開始</th>
-            <th>結果</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(data?.latest_jobs ?? []).length === 0 && (
-            <tr>
-              <td colSpan={5} className="muted">
-                まだ実行履歴がありません
-              </td>
-            </tr>
-          )}
-          {(data?.latest_jobs ?? []).map((job) => (
-            <tr key={job.id}>
-              <td>{job.label}</td>
-              <td>
-                <StatusBadge status={job.status} />
-              </td>
-              <td>{triggerLabel(job.trigger)}</td>
-              <td>{formatDateTime(job.started_at ?? job.created_at)}</td>
-              <td className="detail-cell">{job.detail ?? "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <LatestJobsTable jobs={data?.latest_jobs ?? []} />
 
-      <h2>実行履歴</h2>
-      <ErrorNote message={error} />
-      <table className="table">
-        <thead>
-          <tr>
-            <th>ジョブ</th>
-            <th>状態</th>
-            <th>実行種別</th>
-            <th>依頼</th>
-            <th>開始</th>
-            <th>終了</th>
-            <th>結果</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visibleHistoryJobs.map((job) => (
-            <Fragment key={job.id}>
-              <tr
-                className="row-clickable"
-                onClick={() => setOpenJobId((current) => (current === job.id ? null : job.id))}
-              >
-                <td>{job.label}</td>
-                <td>
-                  <StatusBadge status={job.status} />
-                </td>
-                <td>{triggerLabel(job.trigger)}</td>
-                <td>{formatDateTime(job.created_at)}</td>
-                <td>{formatDateTime(job.started_at)}</td>
-                <td>{formatDateTime(job.finished_at)}</td>
-                <td className="detail-cell">{job.detail ? job.detail.split("\n")[0] : "-"}</td>
-              </tr>
-              {openJobId === job.id && (
-                <tr>
-                  <td colSpan={7}>
-                    <div className="job-detail-panel">
-                      <div className="job-detail-actions">
-                        <strong>実行状況ログ</strong>
-                        {job.status === "queued" && (
-                          <button
-                            className="secondary danger-outline"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void stopJob(job.id);
-                            }}
-                          >
-                            停止
-                          </button>
-                        )}
-                      </div>
-                      <div className="job-detail-grid">
-                        <span>ID</span>
-                        <span>{job.id}</span>
-                        <span>状態</span>
-                        <span>{job.status}</span>
-                        <span>パラメータ</span>
-                        <span className="detail-cell">{job.params ?? "-"}</span>
-                        <span>ログ</span>
-                        <span className="detail-cell">
-                          {job.detail ??
-                            (job.status === "running"
-                              ? "実行中です。完了後に結果ログが反映されます。"
-                              : "-")}
-                        </span>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
-      <TablePager
+      <JobHistoryTable
+        jobs={historyJobs}
         page={historyPage}
-        pageCount={historyPageCount}
-        pageSize={HISTORY_PAGE_SIZE}
-        total={historyJobs.length}
+        openJobId={openJobId}
+        error={error}
+        onToggle={(id) => setOpenJobId((current) => (current === id ? null : id))}
+        onStop={(id) => void stopJob(id)}
         onPageChange={(nextPage) => {
           setOpenJobId(null);
           setHistoryPage(nextPage);
         }}
       />
-
-    </div>
-  );
-}
-
-function TablePager({
-  page,
-  pageCount,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  page: number;
-  pageCount: number;
-  pageSize: number;
-  total: number;
-  onPageChange: (page: number) => void;
-}) {
-  if (total <= pageSize) return null;
-  return (
-    <div className="pagination-bar table-pagination">
-      <span className="muted">
-        {total.toLocaleString()}件中{" "}
-        {(page * pageSize + 1).toLocaleString()}-
-        {Math.min((page + 1) * pageSize, total).toLocaleString()}件を表示
-      </span>
-      <div className="pagination-actions">
-        <button disabled={page === 0} onClick={() => onPageChange(page - 1)}>
-          前のページ
-        </button>
-        <span>
-          {page + 1} / {pageCount}ページ
-        </span>
-        <button disabled={page + 1 >= pageCount} onClick={() => onPageChange(page + 1)}>
-          次のページ
-        </button>
-      </div>
     </div>
   );
 }

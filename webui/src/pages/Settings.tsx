@@ -1,84 +1,21 @@
 import { useEffect, useState } from "react";
-import { formatDateTime, getJSON, postJSON, putJSON } from "../api";
+import { getJSON, postJSON, putJSON } from "../api";
 import { ErrorNote, Toast, usePolling } from "../components";
-import type { ModelParamKey, ScheduledJobSetting, SettingsView, SystemVersion } from "../types";
-
-type ScheduleForm = Record<string, string | boolean>;
-type ModelForm = Record<string, string>;
-type FeatureForm = Record<string, boolean>;
-
-// モデル学習パラメータの入力欄定義(キー・ラベル・入力刻み・最小値)
-const MODEL_PARAMS: { key: ModelParamKey; label: string; step: number; min: number }[] = [
-  { key: "model_learning_rate", label: "学習率 (learning_rate)", step: 0.01, min: 0 },
-  { key: "model_num_leaves", label: "葉の数 (num_leaves)", step: 1, min: 2 },
-  { key: "model_max_depth", label: "木の最大深さ (max_depth, -1=無制限)", step: 1, min: -1 },
-  { key: "model_min_child_samples", label: "葉の最小データ数 (min_child_samples)", step: 1, min: 1 },
-  { key: "model_feature_fraction", label: "特徴量サンプリング率 (feature_fraction)", step: 0.05, min: 0 },
-  { key: "model_bagging_fraction", label: "データサンプリング率 (bagging_fraction)", step: 0.05, min: 0 },
-  { key: "model_reg_alpha", label: "L1正則化 (reg_alpha)", step: 0.1, min: 0 },
-  { key: "model_reg_lambda", label: "L2正則化 (reg_lambda)", step: 0.1, min: 0 },
-  { key: "model_max_boost_rounds", label: "最大ブースティング回数 (max_boost_rounds)", step: 50, min: 1 },
-  { key: "model_early_stopping_rounds", label: "早期終了ラウンド (early_stopping_rounds)", step: 5, min: 1 },
-  { key: "model_valid_fraction", label: "検証データの割合 (valid_fraction)", step: 0.05, min: 0 },
-  { key: "model_min_races", label: "学習に必要な最小レース数 (min_races)", step: 5, min: 1 },
-];
-
-function modelToForm(editable: SettingsView["editable"]): ModelForm {
-  const form: ModelForm = {};
-  for (const p of MODEL_PARAMS) form[p.key] = String(editable[p.key]);
-  form.model_train_start_date = String(editable.model_train_start_date ?? "");
-  form.model_train_end_date = String(editable.model_train_end_date ?? "");
-  return form;
-}
-
-function featuresToForm(view: SettingsView): FeatureForm {
-  const form: FeatureForm = {};
-  for (const group of view.model_features) {
-    for (const feature of group.features) form[feature.name] = feature.enabled;
-  }
-  return form;
-}
-
-// 曜日番号はPythonのdate.weekday()に合わせ、月=0〜日=6。表示は日曜始まり。
-const WEEKDAYS: { label: string; value: number }[] = [
-  { label: "日", value: 6 },
-  { label: "月", value: 0 },
-  { label: "火", value: 1 },
-  { label: "水", value: 2 },
-  { label: "木", value: 3 },
-  { label: "金", value: 4 },
-  { label: "土", value: 5 },
-];
-
-function parseDays(value: string | boolean | undefined): Set<number> {
-  return new Set(
-    String(value ?? "")
-      .split(",")
-      .filter((part) => part.trim() !== "")
-      .map(Number)
-  );
-}
-
-function daysToString(days: Set<number>): string {
-  return [...days].sort((a, b) => a - b).join(",");
-}
-
-function scheduleToForm(jobs: ScheduledJobSetting[]): ScheduleForm {
-  const form: ScheduleForm = {};
-  for (const job of jobs) {
-    form[job.enabled_key] = job.enabled;
-    if (job.time_key) form[job.time_key] = job.exact_time ?? "";
-    if (job.interval_key) form[job.interval_key] = job.interval_minutes == null ? "" : String(job.interval_minutes);
-    if (job.before_start_key) {
-      form[job.before_start_key] = job.before_start_minutes == null ? "" : String(job.before_start_minutes);
-    }
-    if (job.after_start_key) {
-      form[job.after_start_key] = job.after_start_minutes == null ? "" : String(job.after_start_minutes);
-    }
-    form[job.days_key] = (job.days ?? []).join(",");
-  }
-  return form;
-}
+import type { ScheduledJobSetting, SettingsView, SystemVersion } from "../types";
+import { AdminSection } from "./settings/AdminSection";
+import { FeatureSelect } from "./settings/FeatureSelect";
+import { ScheduleTable } from "./settings/ScheduleTable";
+import {
+  MODEL_PARAMS,
+  daysToString,
+  featuresToForm,
+  modelToForm,
+  parseDays,
+  scheduleToForm,
+  type FeatureForm,
+  type ModelForm,
+  type ScheduleForm,
+} from "./settings/helpers";
 
 export default function SettingsPage() {
   const [view, setView] = useState<SettingsView | null>(null);
@@ -335,116 +272,14 @@ export default function SettingsPage() {
       <p className="muted">
         賭け対象決定と決済は固定の確認間隔ではなく、レースの発走時刻を基準に実行します。
       </p>
-      <div className="table-scroll">
-      <table className="table settings-schedule-table">
-        <thead>
-          <tr>
-            <th>ジョブ</th>
-            <th>有効</th>
-            <th>指定時分</th>
-            <th>確認間隔(分)</th>
-            <th>発走前(分)</th>
-            <th>発走後(分)</th>
-            <th>実行曜日</th>
-            <th>次回予定</th>
-            <th>内容</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(view?.scheduled_jobs ?? []).map((job) => {
-            return (
-            <tr key={job.job_name}>
-              <td>{job.label}</td>
-              <td>
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(scheduleForm[job.enabled_key])}
-                    onChange={(e) => updateScheduleField(job.enabled_key, e.target.checked)}
-                  />
-                  <span>{scheduleForm[job.enabled_key] ? "ON" : "OFF"}</span>
-                </label>
-              </td>
-              <td>
-                {job.time_key ? (
-                  <input
-                    className="schedule-time-input"
-                    type="time"
-                    value={String(scheduleForm[job.time_key] ?? "")}
-                    onChange={(e) => updateScheduleTime(job, e.target.value)}
-                  />
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td>
-                {job.interval_key ? (
-                  <input
-                    className="schedule-number-input"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={String(scheduleForm[job.interval_key] ?? "")}
-                    onChange={(e) => updateScheduleRelative(job, job.interval_key!, e.target.value)}
-                  />
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td>
-                {job.before_start_key ? (
-                  <input
-                    className="schedule-number-input"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={String(scheduleForm[job.before_start_key] ?? "")}
-                    onChange={(e) => updateScheduleRelative(job, job.before_start_key!, e.target.value)}
-                  />
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td>
-                {job.after_start_key ? (
-                  <input
-                    className="schedule-number-input"
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={String(scheduleForm[job.after_start_key] ?? "")}
-                    onChange={(e) => updateScheduleRelative(job, job.after_start_key!, e.target.value)}
-                  />
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td>
-                <div className="weekday-toggles">
-                  {WEEKDAYS.map((day) => {
-                    const active = parseDays(scheduleForm[job.days_key]).has(day.value);
-                    return (
-                      <button
-                        type="button"
-                        key={day.value}
-                        className={`weekday-toggle${active ? " active" : ""}`}
-                        aria-pressed={active}
-                        onClick={() => toggleDay(job.days_key, day.value)}
-                      >
-                        {day.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </td>
-              <td>{job.enabled ? formatDateTime(job.next_run_at) : "-"}</td>
-              <td className="muted">{job.description}</td>
-            </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      </div>
+      <ScheduleTable
+        jobs={view?.scheduled_jobs ?? []}
+        scheduleForm={scheduleForm}
+        onField={updateScheduleField}
+        onTime={updateScheduleTime}
+        onRelative={updateScheduleRelative}
+        onToggleDay={toggleDay}
+      />
 
       <h2>モデルの学習期間</h2>
       <p className="muted">
@@ -497,47 +332,12 @@ export default function SettingsPage() {
         学習に使う特徴量を選びます。チェックを外した特徴量は次回のモデル学習から除外されます
         (すべて外した場合は安全のため全特徴量で学習します)。「欠損n%」は最新学習時点で値が欠けていた割合です。
       </p>
-      <div className="feature-select">
-        {(view?.model_features ?? []).map((group) => {
-          const names = group.features.map((f) => f.name);
-          return (
-            <div key={group.group} className="feature-select-group">
-              <div className="feature-select-head">
-                <h3>{group.group}</h3>
-                <div className="feature-select-actions">
-                  <button type="button" onClick={() => setGroupFeatures(names, true)}>
-                    全選択
-                  </button>
-                  <button type="button" onClick={() => setGroupFeatures(names, false)}>
-                    全解除
-                  </button>
-                </div>
-              </div>
-              <div className="feature-checkboxes">
-                {group.features.map((feature) => (
-                  <label key={feature.name} className="feature-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(featureForm[feature.name])}
-                      onChange={() => toggleFeature(feature.name)}
-                    />
-                    <span>
-                      {feature.label}
-                      {feature.categorical && <span className="muted"> (カテゴリ)</span>}
-                      {feature.missing_rate != null && (
-                        <span className="muted feature-missing">
-                          {" "}
-                          欠損{(feature.missing_rate * 100).toFixed(0)}%
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <FeatureSelect
+        groups={view?.model_features ?? []}
+        featureForm={featureForm}
+        onToggle={toggleFeature}
+        onGroup={setGroupFeatures}
+      />
 
       <div className="schedule-actions">
         <button className="primary" onClick={save} disabled={saving || reloading}>
@@ -585,75 +385,11 @@ export default function SettingsPage() {
         </details>
       )}
 
-      <section className="settings-admin-section">
-        <h2>管理操作</h2>
-
-        <div className="admin-block">
-          <h3>
-            ソフトウェア更新
-            {version?.update_available && <span className="update-badge">更新あり</span>}
-          </h3>
-          {!version?.available ? (
-            <p className="muted">
-              デプロイエージェントが未検出です。ホストで{" "}
-              <code>scripts/deploy_agent.sh</code>(Linux)または{" "}
-              <code>scripts/deploy_agent.ps1</code>(Windows)を起動すると、
-              現在のバージョンと更新有無が表示されます。
-            </p>
-          ) : (
-            <>
-              <table className="table deploy-status-table">
-                <tbody>
-                  <tr>
-                    <td>稼働中バージョン</td>
-                    <td>
-                      {version.current_sha ?? "-"}
-                      {version.current_ref ? ` (${version.current_ref})` : ""}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td>最新バージョン</td>
-                    <td>
-                      {version.remote_sha ?? "-"}
-                      {version.update_available ? " — 更新あり" : " — 最新です"}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td>更新確認</td>
-                    <td>{formatDateTime(version.last_checked_at)}</td>
-                  </tr>
-                  <tr>
-                    <td>デプロイ状態</td>
-                    <td>
-                      {version.state ?? "-"}
-                      {version.last_deploy_at ? ` / 最終: ${formatDateTime(version.last_deploy_at)}` : ""}
-                      {version.last_deploy_result ? ` (${version.last_deploy_result})` : ""}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              {version.message && <pre className="deploy-log">{version.message}</pre>}
-              <button
-                className="secondary danger-outline"
-                disabled={version.state === "requested" || version.state === "running"}
-                onClick={() => void deploySystem()}
-              >
-                {version.state === "running" ? "デプロイ中..." : "アップデートを実行"}
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="admin-block">
-          <h3>システム再起動</h3>
-          <p className="muted">
-            システム全体の再起動は通常の設定保存とは別操作です。必要な時だけ実行してください。
-          </p>
-          <button className="secondary danger-outline" onClick={() => void restartSystem()}>
-            システム全体を再起動
-          </button>
-        </div>
-      </section>
+      <AdminSection
+        version={version ?? null}
+        onDeploy={() => void deploySystem()}
+        onRestart={() => void restartSystem()}
+      />
     </div>
   );
 }
