@@ -440,6 +440,8 @@ export interface JockeyDetail {
   jockey_id: string;
   name: string | null;
   results_fetched_at: string | null;
+  years: number[];
+  selected_year: number | null;
   results: PersonResult[];
 }
 
@@ -447,6 +449,8 @@ export interface TrainerDetail {
   trainer_id: string;
   name: string | null;
   results_fetched_at: string | null;
+  years: number[];
+  selected_year: number | null;
   results: PersonResult[];
 }
 

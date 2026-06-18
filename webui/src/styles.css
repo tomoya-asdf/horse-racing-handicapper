@@ -1120,6 +1120,31 @@ h2 {
   margin-bottom: 18px;
 }
 
+.person-year-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.person-year-filter span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.person-year-filter select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+.person-year-filter select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .mode-switch {
   display: flex;
   border: 1px solid var(--border);

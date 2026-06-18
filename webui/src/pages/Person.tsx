@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { getJSON, formatDate, formatFullDateTime } from "../api";
 import { ErrorNote, usePolling } from "../components";
 import type { JockeyDetail, PersonResult, TrainerDetail } from "../types";
@@ -24,10 +26,15 @@ function otherPersonId(kind: PersonKind, result: PersonResult): string | null | 
 export default function PersonPage({ kind, personId }: { kind: PersonKind; personId: string }) {
   const endpoint = kind === "jockey" ? "jockeys" : "trainers";
   const label = kind === "jockey" ? "騎手" : "調教師";
+  const [year, setYear] = useState<number | null>(null);
+
+  // 別の人物を開いたら年度選択をリセットし、最新年度から表示する
+  useEffect(() => setYear(null), [kind, personId]);
+
   const { data, error } = usePolling<JockeyDetail | TrainerDetail>(
-    () => getJSON(`/api/${endpoint}/${personId}`),
+    () => getJSON(`/api/${endpoint}/${personId}${year != null ? `?year=${year}` : ""}`),
     60000,
-    [kind, personId]
+    [kind, personId, year]
   );
 
   if (error) return <ErrorNote message={error} />;
@@ -45,11 +52,27 @@ export default function PersonPage({ kind, personId }: { kind: PersonKind; perso
             <span className="muted">取得: {formatFullDateTime(data.results_fetched_at)}</span>
           </div>
         </div>
+        {data.years.length > 0 && (
+          <label className="person-year-filter">
+            <span>年度</span>
+            <select
+              value={data.selected_year ?? ""}
+              onChange={(e) => setYear(Number(e.target.value))}
+            >
+              {data.years.map((y) => (
+                <option key={y} value={y}>
+                  {y}年
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       {data.results.length === 0 ? (
         <p className="muted">
-          過去戦績はまだ収集されていません。ジョブ画面から
-          {kind === "jockey" ? "騎手過去戦績収集" : "調教師過去戦績収集"}を実行すると表示されます。
+          {data.selected_year != null
+            ? `${data.selected_year}年の戦績はありません。`
+            : `過去戦績はまだ収集されていません。`}
         </p>
       ) : (
         <table className="table horse-results-table">
