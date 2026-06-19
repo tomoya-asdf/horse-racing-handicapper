@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import extract
 from sqlalchemy.orm import selectinload
 
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import Entry, Race
 
 router = APIRouter()
@@ -21,8 +21,7 @@ def _person_detail(
     戦績は年度(``year``)単位で返す。指定が無い/未収集の年度なら最新年度を使い、
     収集済みの全年度を ``years`` として返してUI側で切り替えられるようにする。
     """
-    session = get_session()
-    try:
+    with session_scope() as session:
         person_col = getattr(Entry, id_attr)
         year_col = extract("year", Race.race_date)
         year_rows = (
@@ -80,8 +79,6 @@ def _person_detail(
             "selected_year": selected_year,
             "results": results,
         }
-    finally:
-        session.close()
 
 
 @router.get("/api/jockeys/{jockey_id}")

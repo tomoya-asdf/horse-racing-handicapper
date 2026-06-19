@@ -8,7 +8,7 @@ import logging
 from datetime import date, timedelta
 
 from src.collector import scraper
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import KaisaiDate
 from src.common.timeutils import now_jst
 
@@ -19,8 +19,7 @@ def _store_kaisai_dates(dates: set) -> None:
     """netkeiba開催カレンダーの開催日を kaisai_dates テーブルへ反映する(冪等)。"""
     if not dates:
         return
-    session = get_session()
-    try:
+    with session_scope() as session:
         existing = {
             row[0]
             for row in session.query(KaisaiDate.kaisai_date)
@@ -33,8 +32,6 @@ def _store_kaisai_dates(dates: set) -> None:
                 continue
             session.add(KaisaiDate(kaisai_date=d, fetched_at=now))
         session.commit()
-    finally:
-        session.close()
 
 
 def collect_kaisai_dates(start, end) -> frozenset:

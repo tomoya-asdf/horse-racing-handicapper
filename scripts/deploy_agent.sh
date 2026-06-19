@@ -7,8 +7,9 @@
 # 渡さないため、デプロイはホスト上のこのスクリプトが担当する。WebUI とは共有ボリューム
 # ./data 上の JSON でやりとりする。
 #
-#   - data/deploy_request.json : WebUI が書く依頼。本スクリプトが処理後に削除する。
-#   - data/deploy_status.json  : 本スクリプトが書く状態(現在バージョン/更新有無/進捗)。
+#   - data/deploy_request.json  : WebUI が書くデプロイ依頼。本スクリプトが処理後に削除する。
+#   - data/restart_request.json : WebUI が書く再起動依頼。本スクリプトが処理後に削除する。
+#   - data/deploy_status.json   : 本スクリプトが書く状態(現在バージョン/更新有無/進捗)。
 #
 # コンテナを丸ごと作り直しても、このスクリプトはホスト上で動き続けるため安全に全スタックを
 # 更新できる。git と docker(compose プラグイン)がホストで使えることが前提。
@@ -30,6 +31,7 @@ COMPOSE="$REPO/docker-compose.yml"
 DATA="$REPO/data"
 STATUS_FILE="$DATA/deploy_status.json"
 REQUEST_FILE="$DATA/deploy_request.json"
+RESTART_REQUEST_FILE="$DATA/restart_request.json"
 
 mkdir -p "$DATA"
 
@@ -120,6 +122,24 @@ run_deploy() {
   write_status "success" false "$(local_sha)" "$ref" "$(remote_sha)"
 }
 
+run_restart() {
+  local ref=$1
+  last_deploy_at=$(now)
+  write_status "running" false "$(local_sha)" "$ref" "$(remote_sha)"
+
+  local out code
+  out=$("${DC[@]}" -f "$COMPOSE" restart collector predictor webui 2>&1); code=$?
+  if [ $code -ne 0 ]; then
+    last_deploy_result="failed"
+    last_message="[restart] 失敗:"$'\n'"$(printf '%s' "$out" | tail -n 40)"
+    write_status "failed" false "$(local_sha)" "$ref" "$(remote_sha)"
+    return
+  fi
+  last_deploy_result="success"
+  last_message="再起動成功:"$'\n'"$(printf '%s' "$out" | tail -n 20)"
+  write_status "success" false "$(local_sha)" "$ref" "$(remote_sha)"
+}
+
 echo "deploy agent started. repo=$REPO interval=${INTERVAL}s compose=[${DC[*]}]"
 
 while true; do
@@ -137,6 +157,10 @@ while true; do
       rm -f "$REQUEST_FILE"
       echo "$(now) deploy requested -> running"
       run_deploy "$ref"
+    elif [ -f "$RESTART_REQUEST_FILE" ]; then
+      rm -f "$RESTART_REQUEST_FILE"
+      echo "$(now) restart requested -> running"
+      run_restart "$ref"
     else
       state="${last_deploy_result:-idle}"
       write_status "$state" "$update" "$local_s" "$ref" "$remote_s"

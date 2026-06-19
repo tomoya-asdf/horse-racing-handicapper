@@ -14,7 +14,7 @@ from src.common.paths import MODEL_PATH
 logger = logging.getLogger(__name__)
 
 
-def _iso(value: datetime | None) -> str | None:
+def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
@@ -27,7 +27,7 @@ def _json_value(raw: str | None, default):
         return default
 
 
-def _bet_stats(bets: list[Bet]) -> dict:
+def bet_stats(bets: list[Bet]) -> dict:
     placed = [b for b in bets if b.status == BetStatus.PLACED.value]
     settled = [b for b in placed if b.is_settled]
     invested = sum(b.amount for b in settled)
@@ -62,7 +62,7 @@ def _bet_stats(bets: list[Bet]) -> dict:
     }
 
 
-def _job_to_dict(run: JobRun) -> dict:
+def job_to_dict(run: JobRun) -> dict:
     return {
         "id": run.id,
         "job_name": run.job_name,
@@ -71,13 +71,13 @@ def _job_to_dict(run: JobRun) -> dict:
         "status": run.status,
         "detail": run.detail,
         "params": run.params,
-        "created_at": _iso(run.created_at),
-        "started_at": _iso(run.started_at),
-        "finished_at": _iso(run.finished_at),
+        "created_at": iso(run.created_at),
+        "started_at": iso(run.started_at),
+        "finished_at": iso(run.finished_at),
     }
 
 
-def _reservation_to_dict(reservation: dict) -> dict:
+def reservation_to_dict(reservation: dict) -> dict:
     return {
         **reservation,
         "label": JOB_LABELS.get(reservation["job_name"], reservation["job_name"]),
@@ -94,7 +94,7 @@ def _latest_prediction_model_version(session) -> str | None:
     return row[0] if row else None
 
 
-def _model_info(session=None) -> dict:
+def model_info(session=None) -> dict:
     latest_model = None
     if session is not None:
         latest_model = session.query(ModelVersion).order_by(ModelVersion.trained_at.desc()).first()
@@ -105,14 +105,14 @@ def _model_info(session=None) -> dict:
         return {
             "trained": bool(version),
             "version": version,
-            "trained_at": _iso(latest_model.trained_at) if latest_model else None,
+            "trained_at": iso(latest_model.trained_at) if latest_model else None,
         }
     info = {
         "trained": True,
         "version": latest_model.version if latest_model else (
             _latest_prediction_model_version(session) if session is not None else None
         ),
-        "trained_at": _iso(latest_model.trained_at) if latest_model else None,
+        "trained_at": iso(latest_model.trained_at) if latest_model else None,
     }
     try:
         info["trained_at"] = datetime.fromtimestamp(MODEL_PATH.stat().st_mtime).isoformat()
@@ -131,10 +131,10 @@ def _model_info(session=None) -> dict:
     return info
 
 
-def _model_version_to_dict(model_version: ModelVersion) -> dict:
+def model_version_to_dict(model_version: ModelVersion) -> dict:
     return {
         "version": model_version.version,
-        "trained_at": _iso(model_version.trained_at),
+        "trained_at": iso(model_version.trained_at),
         "race_count": model_version.race_count,
         "row_count": model_version.row_count,
         "valid_race_count": model_version.valid_race_count,
@@ -154,7 +154,7 @@ def _model_version_to_dict(model_version: ModelVersion) -> dict:
 def _model_bundle_to_dict(bundle: dict, trained_at: datetime | None = None) -> dict:
     return {
         "version": bundle.get("version"),
-        "trained_at": _iso(trained_at),
+        "trained_at": iso(trained_at),
         "race_count": None,
         "row_count": None,
         "valid_race_count": None,
@@ -171,7 +171,7 @@ def _model_bundle_to_dict(bundle: dict, trained_at: datetime | None = None) -> d
     }
 
 
-def _minimal_model_version_dict(version: str) -> dict:
+def minimal_model_version_dict(version: str) -> dict:
     return {
         "version": version,
         "trained_at": None,
@@ -191,7 +191,7 @@ def _minimal_model_version_dict(version: str) -> dict:
     }
 
 
-def _current_model_bundle_dict() -> dict | None:
+def current_model_bundle_dict() -> dict | None:
     if not MODEL_PATH.exists():
         return None
     try:
@@ -207,7 +207,7 @@ def _current_model_bundle_dict() -> dict | None:
         return None
 
 
-def _rank_entries(values: dict[int, float], reverse: bool = False) -> dict[int, int]:
+def rank_entries(values: dict[int, float], reverse: bool = False) -> dict[int, int]:
     ranked: dict[int, int] = {}
     previous_value = None
     previous_rank = 0

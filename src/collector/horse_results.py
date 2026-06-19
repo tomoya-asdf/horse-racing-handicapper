@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from src.collector import scraper
 from src.common.config import settings
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import (
     Horse,
     HorsePedigree,
@@ -159,44 +159,36 @@ def _fetch_and_store_one_horse(horse_id: str, need_pedigree: bool) -> bool:
         except Exception as exc:
             logger.warning("failed to fetch pedigree horse_id=%s: %s", horse_id, exc)
 
-    session = get_session()
     try:
-        _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
-        if ped and ped.get("ancestors"):
-            _upsert_horse_pedigree(session, horse_id, ped["ancestors"])
-        session.commit()
-        return True
+        with session_scope() as session:
+            _upsert_horse_results(session, horse_id, data["name"], data["results"], ped)
+            if ped and ped.get("ancestors"):
+                _upsert_horse_pedigree(session, horse_id, ped["ancestors"])
+            session.commit()
+            return True
     except Exception:
-        session.rollback()
+        # session_scope が rollback / close を行う。ここでは握りつぶして False を返す。
         logger.exception("failed to upsert horse results horse_id=%s", horse_id)
         return False
-    finally:
-        session.close()
 
 
-def _update_horse_results(max_races: int) -> int:
+def update_horse_results(max_races: int) -> int:
     """races 起点で、未収集レースの出走馬の過去成績・血統を集める。処理レース数を返す。"""
     if max_races <= 0:
         return 0
-    session = get_session()
-    try:
+    with session_scope() as session:
         races = _races_needing_collection(session, KIND_HORSE, max_races)
         race_infos = [
             (race.id, [e.horse_id for e in race.entries if e.horse_id]) for race in races
         ]
-    finally:
-        session.close()
 
     fetched_horses: set[str] = set()
     processed = 0
     for race_id, horse_ids in race_infos:
         unique_ids = list(dict.fromkeys(horse_ids))
-        session = get_session()
-        try:
+        with session_scope() as session:
             ped_known = _horses_with_pedigree(session, unique_ids)
             fresh = _fresh_horses(session, unique_ids, settings.HORSE_RESULTS_REFRESH_DAYS)
-        finally:
-            session.close()
         for horse_id in unique_ids:
             if horse_id in fetched_horses:
                 continue
@@ -205,11 +197,8 @@ def _update_horse_results(max_races: int) -> int:
             if horse_id in fresh and horse_id in ped_known:
                 continue
             _fetch_and_store_one_horse(horse_id, horse_id not in ped_known)
-        session = get_session()
-        try:
+        with session_scope() as session:
             _mark_race_collected(session, race_id, KIND_HORSE)
             session.commit()
-        finally:
-            session.close()
         processed += 1
     return processed

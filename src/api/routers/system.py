@@ -1,22 +1,21 @@
 """システム操作 API(再起動・バージョン・デプロイ依頼)。
 
-アップデート/デプロイは webui コンテナからは行わず、ホスト側の常駐エージェント
+アップデート/デプロイ/再起動は webui コンテナからは行わず、ホスト側の常駐エージェント
 (scripts/deploy_agent.sh / deploy_agent.ps1)が担当する。両者は共有ボリューム ./data 上の
 JSON でやりとりする(webui に docker.sock を渡さないための分離)。
-  - deploy_status.json : エージェントが書き込む現在の状態(バージョン/更新有無/進捗)
-  - deploy_request.json: webui が書き込むデプロイ依頼。エージェントが処理後に削除する
+  - deploy_status.json  : エージェントが書き込む現在の状態(バージョン/更新有無/進捗)
+  - deploy_request.json : webui が書き込むデプロイ依頼。エージェントが処理後に削除する
+  - restart_request.json: webui が書き込む再起動依頼。エージェントが処理後に削除する
 """
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import require_admin
 from src.common import jobs
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import JobRun, JobStatus
 from src.common.timeutils import now_jst
 
@@ -24,6 +23,7 @@ router = APIRouter()
 
 _DEPLOY_STATUS_FILE = Path("/app/data/deploy_status.json")
 _DEPLOY_REQUEST_FILE = Path("/app/data/deploy_request.json")
+_RESTART_REQUEST_FILE = Path("/app/data/restart_request.json")
 
 
 def _read_deploy_status() -> dict:
@@ -37,25 +37,32 @@ def _read_deploy_status() -> dict:
 
 @router.post("/api/system/restart", dependencies=[Depends(require_admin)])
 def restart_system() -> dict:
-    docker = shutil.which("docker")
-    compose_file = Path("/app/docker-compose.yml")
-    if docker is None or not compose_file.exists():
+    """コンテナ再起動をホストエージェントへ依頼する。
+
+    デプロイと同じく webui コンテナからは docker を直接操作せず、共有ボリューム上の
+    依頼ファイルを書いてホスト側エージェントに実行させる(docker.sock 非共有のため)。
+    """
+    status = _read_deploy_status()
+    if not status:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Web UIコンテナからDocker Composeを操作できない構成です。"
-                "ホスト側で `docker compose restart collector predictor webui` を実行してください。"
+                "デプロイエージェントが検出できません(状態ファイルがありません)。"
+                "ホスト側でデプロイエージェントを起動してください"
+                "(Linux: scripts/deploy_agent.sh / Windows: scripts/deploy_agent.ps1)。"
             ),
         )
-    result = subprocess.run(
-        [docker, "compose", "-f", str(compose_file), "restart", "collector", "predictor", "webui"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=(result.stderr or result.stdout or "restart failed")[:1000])
-    return {"restarted": True, "detail": result.stdout}
+    if status.get("state") in ("requested", "running"):
+        raise HTTPException(status_code=409, detail="デプロイ/再起動を処理中です。完了後に再度お試しください。")
+
+    try:
+        _RESTART_REQUEST_FILE.write_text(
+            json.dumps({"requested_at": now_jst().isoformat()}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"再起動依頼の書き込みに失敗しました: {exc}")
+    return {"requested": True}
 
 
 @router.get("/api/system/version")
@@ -84,8 +91,7 @@ def request_deploy() -> dict:
     実行自体はエージェントが行う。実弾投票を中断しないよう、bet_decide / settle が
     実行中のときは依頼を拒否する。
     """
-    session = get_session()
-    try:
+    with session_scope() as session:
         busy = (
             session.query(JobRun.id)
             .filter(
@@ -94,8 +100,6 @@ def request_deploy() -> dict:
             )
             .first()
         )
-    finally:
-        session.close()
     if busy is not None:
         raise HTTPException(
             status_code=409,

@@ -3,7 +3,7 @@
 import logging
 
 from src.collector.scraper import fetch_race_results
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import Bet, BetStatus
 
 logger = logging.getLogger(__name__)
@@ -69,8 +69,7 @@ def settle_pending_races() -> int:
     the payout table.
     """
     settled_count = 0
-    session = get_session()
-    try:
+    with session_scope() as session:
         pending_bets = (
             session.query(Bet)
             .filter(Bet.is_settled.is_(False), Bet.status == BetStatus.PLACED.value)
@@ -121,6 +120,4 @@ def settle_pending_races() -> int:
             settled_count += 1
 
         session.commit()
-    finally:
-        session.close()
     return settled_count

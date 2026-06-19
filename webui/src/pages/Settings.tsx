@@ -182,7 +182,8 @@ export default function SettingsPage() {
     setError(null);
     setMessage(null);
     const ok = window.confirm(
-      "システム全体の再起動を試行します。Web UIコンテナからDockerを操作できない環境では、手動コマンドが表示されます。"
+      "コンテナ(collector / predictor / webui)の再起動をホストのデプロイエージェントに依頼します。" +
+        "一時的に画面へ接続できなくなることがあります。実行しますか?"
     );
     if (!ok) return;
     try {

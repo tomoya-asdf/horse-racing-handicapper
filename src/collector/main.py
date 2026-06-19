@@ -17,8 +17,8 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from src.collector import scraper
 from src.collector.calendar_store import collect_kaisai_dates
-from src.collector.horse_results import _update_horse_results
-from src.collector.races_store import _update_finished_results, _upsert_races
+from src.collector.horse_results import update_horse_results
+from src.collector.races_store import update_finished_results, upsert_races
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import init_db
@@ -44,9 +44,9 @@ def _run_collect(params: dict) -> str:
         if target not in kaisai:
             continue
         races = scraper.fetch_upcoming_races(target)
-        _upsert_races(races)
+        upsert_races(races)
         total += len(races)
-    updated = _update_finished_results()
+    updated = update_finished_results()
     return (
         f"取得レース={total}件({today}〜{end}, 開催{len(kaisai)}日), "
         f"結果反映={updated}件"
@@ -65,7 +65,7 @@ def _collect_races_limit(params: dict) -> int:
 def _run_collect_horses(params: dict) -> str:
     """未収集レースの出走馬について、過去成績と5代血統をまとめて収集する手動ジョブ。"""
     limit = _collect_races_limit(params)
-    processed = _update_horse_results(limit)
+    processed = update_horse_results(limit)
     return f"馬の過去成績・血統を{processed}レース分収集しました(上限{limit}レース)"
 
 

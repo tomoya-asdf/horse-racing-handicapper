@@ -3,11 +3,11 @@
 from fastapi import APIRouter, HTTPException
 
 from src.api.serializers import (
-    _current_model_bundle_dict,
-    _minimal_model_version_dict,
-    _model_version_to_dict,
+    current_model_bundle_dict,
+    minimal_model_version_dict,
+    model_version_to_dict,
 )
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import Entry, ModelVersion, Prediction
 
 router = APIRouter()
@@ -15,16 +15,15 @@ router = APIRouter()
 
 @router.get("/api/models")
 def list_models(limit: int = 30) -> dict:
-    session = get_session()
-    try:
+    with session_scope() as session:
         rows = (
             session.query(ModelVersion)
             .order_by(ModelVersion.trained_at.desc(), ModelVersion.version.desc())
             .limit(min(max(limit, 1), 100))
             .all()
         )
-        models = [_model_version_to_dict(row) for row in rows]
-        current = _current_model_bundle_dict()
+        models = [model_version_to_dict(row) for row in rows]
+        current = current_model_bundle_dict()
         if current and not any(row["version"] == current["version"] for row in models):
             models.insert(0, current)
         known_versions = {row["version"] for row in models}
@@ -38,20 +37,17 @@ def list_models(limit: int = 30) -> dict:
         )
         for (version,) in prediction_versions:
             if version not in known_versions:
-                models.append(_minimal_model_version_dict(version))
+                models.append(minimal_model_version_dict(version))
                 known_versions.add(version)
         return {"models": models[: min(max(limit, 1), 100)]}
-    finally:
-        session.close()
 
 
 @router.get("/api/models/{version}")
 def model_detail(version: str) -> dict:
-    session = get_session()
-    try:
+    with session_scope() as session:
         row = session.get(ModelVersion, version)
         if row is None:
-            current = _current_model_bundle_dict()
+            current = current_model_bundle_dict()
             if current and current["version"] == version:
                 return current
             exists = (
@@ -60,11 +56,9 @@ def model_detail(version: str) -> dict:
                 .first()
             )
             if exists is not None:
-                return _minimal_model_version_dict(version)
+                return minimal_model_version_dict(version)
             raise HTTPException(status_code=404, detail="model version not found")
-        return _model_version_to_dict(row)
-    finally:
-        session.close()
+        return model_version_to_dict(row)
 
 
 @router.get("/api/models/{version}/calibration")
@@ -77,8 +71,7 @@ def model_calibration(version: str, bins: int = 10) -> dict:
     スコア分布は1着率が低い側に偏るため、等幅でなく分位でビン分割する。
     """
     bins = min(max(bins, 2), 20)
-    session = get_session()
-    try:
+    with session_scope() as session:
         rows = (
             session.query(Prediction.score, Entry.finish_position)
             .join(Entry, Prediction.entry_id == Entry.id)
@@ -121,5 +114,3 @@ def model_calibration(version: str, bins: int = 10) -> dict:
             "base_rate": (wins_total / total) if total else None,
             "bins": result_bins,
         }
-    finally:
-        session.close()

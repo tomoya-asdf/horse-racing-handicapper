@@ -83,6 +83,8 @@ FastAPI の API と React のビルド済みフロントエンドを配信しま
 
 設定ページの「管理操作」には、ホスト側デプロイエージェントと連携するソフトウェア更新があります。Web UI から `POST /api/system/deploy` を呼ぶとデプロイ要求ファイルが書かれ、ホストで常駐するデプロイエージェント(`scripts/deploy_agent.sh`(Linux/Debian)/ `scripts/deploy_agent.ps1`(Windows))が `git pull` とコンテナ再ビルド・再起動を実行します。エージェントは現在/最新バージョンとデプロイ状態をステータスファイルに書き出し、`GET /api/system/version` がそれを返して画面に表示します。要求・ステータスのやり取りは webui にマウントされた `./data` ディレクトリ上の JSON ファイルで行います。
 
+コンテナ再起動(`POST /api/system/restart`)も同じエージェント方式で行います。webui コンテナは docker.sock を持たないため、再起動要求ファイル(`restart_request.json`)を `./data` に書き、エージェントが `docker compose restart collector predictor webui` を実行します。
+
 ## データモデル
 
 ### races
@@ -408,3 +410,15 @@ API は `src/api/main.py` を薄く保ち、機能ごとの `APIRouter`(`src/api
 - Playwright による描画取得は通常の HTML/API 取得より重いため、必要な場合のフォールバックとして使います。
 - 過去戦績の充実度がモデル特徴量に直結します。新しい DB では、まずモデル学習に使う期間を指定して `backfill` を実行してください。バックフィル後も不足がある場合や後続更新をまとめたい場合は `collect_horses` を追加で実行します。
 - DB スキーマ変更履歴管理はまだ簡易方式です。破壊的なスキーマ変更を行う場合は、事前に DB バックアップを取ってください。
+
+## 実装上の補足
+
+- 起動時設定(`src/common/config.py`)は pydantic-settings で型・範囲を検証し、不正値は起動時に落とします。
+- DB セッションは `src/common/db.py` の `session_scope()`(コンテキストマネージャ)/ `get_db`(FastAPI 依存)で取得し、close と例外時 rollback を一元化します。接続プールは `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` で調整できます。
+- 動的設定(`src/common/dynamic_config`)は configs / defaults / parsing / store / schedule / views に分割したパッケージです。外部からは従来どおり `from src.common.dynamic_config import ...` で参照します。
+- 管理ログインはサーバ側でセッションの有効期限を持ち(`ADMIN_SESSION_SECONDS`)、ログイン失敗にはレート制限(`ADMIN_LOGIN_MAX_ATTEMPTS` / `ADMIN_LOGIN_WINDOW_SECONDS`)を設けています。HTTPS 配信時は `ADMIN_COOKIE_SECURE=true` で Cookie に Secure 属性を付与します。
+- netkeiba への HTTP 取得は一時的な失敗(タイムアウト / 5xx / 429)を指数バックオフで再試行します(`SCRAPER_MAX_RETRIES` / `SCRAPER_RETRY_BACKOFF_SECONDS`)。
+
+## テスト
+
+`tests/` に pytest のユニットテストを置いています(設定検証、動的設定のパース、特徴量カタログ、スクレイパーのパース/リトライ、管理セッション/レート制限)。pandas / lightgbm に依存しない範囲を対象にしており、`pytest` で実行できます。CI(`.github/workflows/ci.yml`)は push / PR で共通・API・collector の依存をインストールして実行します。

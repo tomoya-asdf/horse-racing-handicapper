@@ -4,7 +4,7 @@ import logging
 from datetime import timedelta
 
 from src.collector import scraper
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import Entry, Race
 from src.common.timeutils import now_jst
 
@@ -15,9 +15,8 @@ logger = logging.getLogger(__name__)
 RESULT_FETCH_DAYS = 7
 
 
-def _upsert_races(races: list[dict]) -> None:
-    session = get_session()
-    try:
+def upsert_races(races: list[dict]) -> None:
+    with session_scope() as session:
         for race_data in races:
             race = session.query(Race).filter_by(race_key=race_data["race_key"]).one_or_none()
             if race is None:
@@ -74,16 +73,13 @@ def _upsert_races(races: list[dict]) -> None:
                     entry.horse_weight_diff = entry_data["horse_weight_diff"]
 
         session.commit()
-    finally:
-        session.close()
 
 
-def _update_finished_results() -> int:
+def update_finished_results() -> int:
     """確定したレースの着順をDBへ反映し、反映できたレース数を返す。"""
     updated = 0
-    session = get_session()
     day_cache: dict = {}
-    try:
+    with session_scope() as session:
         now = now_jst()
         races = (
             session.query(Race)
@@ -144,6 +140,4 @@ def _update_finished_results() -> int:
             updated += 1
 
         session.commit()
-    finally:
-        session.close()
     return updated

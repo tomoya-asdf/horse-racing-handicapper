@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# リポジトリルートを import パスに含め、テストから ``src.*`` を直接 import できるようにする
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

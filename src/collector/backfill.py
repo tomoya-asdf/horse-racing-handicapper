@@ -6,8 +6,8 @@ from datetime import date, datetime, timedelta
 
 from src.collector import scraper
 from src.collector.calendar_store import collect_kaisai_dates
-from src.collector.races_store import _upsert_races
-from src.common.db import get_session, init_db
+from src.collector.races_store import upsert_races
+from src.common.db import init_db, session_scope
 from src.common.models import Race
 from src.common.timeutils import now_jst
 
@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _apply_results(start: date, end: date) -> int:
     updated = 0
-    session = get_session()
-    try:
+    with session_scope() as session:
         races = session.query(Race).filter(Race.race_date >= start, Race.race_date <= end).all()
         for race in races:
             if not race.entries:
@@ -43,8 +42,6 @@ def _apply_results(start: date, end: date) -> int:
             updated += 1
 
         session.commit()
-    finally:
-        session.close()
     return updated
 
 
@@ -59,7 +56,7 @@ def backfill(start: date, end: date) -> str:
         if target not in kaisai:
             continue
         races = scraper.fetch_upcoming_races(target, include_started=True)
-        _upsert_races(races)
+        upsert_races(races)
         total += len(races)
         daily_updated = _apply_results(target, target)
         updated += daily_updated

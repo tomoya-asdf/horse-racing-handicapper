@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 
 from src.api.deps import BACKFILL_MAX_DAYS, JOB_LABELS, require_admin
-from src.api.serializers import _job_to_dict, _reservation_to_dict
+from src.api.serializers import job_to_dict, reservation_to_dict
 from src.common import jobs
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.dynamic_config import save_settings, scheduled_jobs_view
 from src.common.models import JobRun
 from src.common.timeutils import JST, now_jst
@@ -20,8 +20,7 @@ router = APIRouter()
 def list_jobs(limit: int = 50, offset: int = 0) -> dict:
     page_limit = min(max(limit, 1), 200)
     page_offset = max(offset, 0)
-    session = get_session()
-    try:
+    with session_scope() as session:
         jobs_total = session.query(func.count(JobRun.id)).scalar() or 0
         runs = (
             session.query(JobRun)
@@ -39,18 +38,16 @@ def list_jobs(limit: int = 50, offset: int = 0) -> dict:
                 .first()
             )
             if run:
-                latest_jobs.append(_job_to_dict(run))
+                latest_jobs.append(job_to_dict(run))
         return {
-            "jobs": [_job_to_dict(run) for run in runs],
+            "jobs": [job_to_dict(run) for run in runs],
             "jobs_total": jobs_total,
             "latest_jobs": latest_jobs,
             "scheduled_jobs": scheduled_jobs_view(),
             "reservations": [
-                _reservation_to_dict(row) for row in jobs.list_reservations(limit=100)
+                reservation_to_dict(row) for row in jobs.list_reservations(limit=100)
             ],
         }
-    finally:
-        session.close()
 
 
 @router.put("/api/jobs/schedule", dependencies=[Depends(require_admin)])
@@ -132,7 +129,7 @@ def create_job_reservation(body: dict) -> dict:
     run_at = _parse_reservation_run_at(body.get("run_at"))
     params = _validate_reservation_params(job_name, body)
     reservation = jobs.reserve(job_name, run_at, params)
-    return _reservation_to_dict(reservation)
+    return reservation_to_dict(reservation)
 
 
 @router.post("/api/job-reservations/{reservation_id}/cancel", dependencies=[Depends(require_admin)])
@@ -157,14 +154,11 @@ def trigger_job(job_name: str, body: dict | None = None) -> dict:
 
 @router.get("/api/jobs/{run_id}", dependencies=[Depends(require_admin)])
 def job_detail(run_id: int) -> dict:
-    session = get_session()
-    try:
+    with session_scope() as session:
         run = session.get(JobRun, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="job run not found")
-        return _job_to_dict(run)
-    finally:
-        session.close()
+        return job_to_dict(run)
 
 
 @router.post("/api/jobs/{run_id}/stop", dependencies=[Depends(require_admin)])
