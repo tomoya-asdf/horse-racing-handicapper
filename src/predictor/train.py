@@ -17,7 +17,7 @@ from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import log_loss, roc_auc_score
 
-from src.common.db import get_session, init_db
+from src.common.db import init_db, session_scope
 from src.common.dynamic_config import ModelConfig, load_model_config
 from src.common.models import Entry, ModelVersion, Race
 from src.common.paths import MODEL_PATH
@@ -70,7 +70,7 @@ def _prepare_training_data(frames: list[pd.DataFrame]) -> pd.DataFrame:
     return data
 
 
-def _load_training_frames(
+def load_training_frames(
     before: date | None = None,
     start: date | None = None,
     end: date | None = None,
@@ -81,8 +81,7 @@ def _load_training_frames(
     (バックテスト時に検証期間のデータを学習から除外するため)。
     ``start`` / ``end`` は学習に使うレースの期間(両端含む)。未指定なら全期間。
     """
-    session = get_session()
-    try:
+    with session_scope() as session:
         query = (
             session.query(Race)
             .join(Entry)
@@ -120,8 +119,6 @@ def _load_training_frames(
             frames.append(features)
 
         return frames, len(frames)
-    finally:
-        session.close()
 
 
 def _evaluate_with_time_split(
@@ -308,8 +305,7 @@ def _feature_importances(bundle: dict) -> list[dict]:
 
 
 def _save_model_version(bundle: dict, metrics: dict, race_count: int) -> None:
-    session = get_session()
-    try:
+    with session_scope() as session:
         row = session.get(ModelVersion, bundle["version"])
         if row is None:
             row = ModelVersion(version=bundle["version"])
@@ -334,8 +330,6 @@ def _save_model_version(bundle: dict, metrics: dict, race_count: int) -> None:
         )
         row.model_path = str(MODEL_PATH)
         session.commit()
-    finally:
-        session.close()
 
 
 def train_model() -> str:
@@ -343,7 +337,7 @@ def train_model() -> str:
     config = load_model_config()
     start = date.fromisoformat(config.train_start) if config.train_start else None
     end = date.fromisoformat(config.train_end) if config.train_end else None
-    frames, race_count = _load_training_frames(start=start, end=end)
+    frames, race_count = load_training_frames(start=start, end=end)
 
     if race_count < config.min_races:
         return f"学習データ不足(レース数={race_count}, 必要数={config.min_races})のためスキップしました"

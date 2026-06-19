@@ -9,18 +9,17 @@ from datetime import timedelta
 
 from src.common import jobs
 from src.common.config import settings
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.dynamic_config import load_scheduled_job_config
 from src.common.models import Bet, BetStatus, Entry, Race
 from src.common.timeutils import now_jst
-from src.predictor.tasks import _run_bet_decide, _run_predict, _run_settle, _run_train
+from src.predictor.tasks import run_bet_decide, run_predict, run_settle, run_train
 
 logger = logging.getLogger(__name__)
 
 
 def _next_bet_decide_due_at(lead_minutes: int):
-    session = get_session()
-    try:
+    with session_scope() as session:
         race = (
             session.query(Race)
             .filter(
@@ -35,13 +34,10 @@ def _next_bet_decide_due_at(lead_minutes: int):
         if race is None or race.start_time is None:
             return None
         return race.start_time - timedelta(minutes=lead_minutes)
-    finally:
-        session.close()
 
 
 def _next_settle_due_at(delay_minutes: int):
-    session = get_session()
-    try:
+    with session_scope() as session:
         row = (
             session.query(Race.start_time)
             .join(Bet, Bet.race_id == Race.id)
@@ -56,11 +52,9 @@ def _next_settle_due_at(delay_minutes: int):
         if row is None or row[0] is None:
             return None
         return row[0] + timedelta(minutes=delay_minutes)
-    finally:
-        session.close()
 
 
-def _scheduled_predict() -> None:
+def scheduled_predict() -> None:
     config = load_scheduled_job_config(jobs.PREDICT)
     if config is None or not config.enabled:
         return
@@ -71,10 +65,10 @@ def _scheduled_predict() -> None:
         exact_time=config.exact_time,
     ):
         return
-    jobs.run_scheduled(jobs.PREDICT, _run_predict)
+    jobs.run_scheduled(jobs.PREDICT, run_predict)
 
 
-def _scheduled_bet_decide() -> None:
+def scheduled_bet_decide() -> None:
     config = load_scheduled_job_config(jobs.BET_DECIDE)
     if config is None or not config.enabled:
         return
@@ -96,10 +90,10 @@ def _scheduled_bet_decide() -> None:
         exact_time=config.exact_time,
     ):
         return
-    jobs.run_scheduled(jobs.BET_DECIDE, _run_bet_decide)
+    jobs.run_scheduled(jobs.BET_DECIDE, run_bet_decide)
 
 
-def _scheduled_settle() -> None:
+def scheduled_settle() -> None:
     config = load_scheduled_job_config(jobs.SETTLE)
     if config is None or not config.enabled:
         return
@@ -121,10 +115,10 @@ def _scheduled_settle() -> None:
         exact_time=config.exact_time,
     ):
         return
-    jobs.run_scheduled(jobs.SETTLE, _run_settle)
+    jobs.run_scheduled(jobs.SETTLE, run_settle)
 
 
-def _scheduled_train() -> None:
+def scheduled_train() -> None:
     config = load_scheduled_job_config(jobs.TRAIN)
     if config is None or not config.enabled:
         return
@@ -135,4 +129,4 @@ def _scheduled_train() -> None:
         exact_time=config.exact_time,
     ):
         return
-    jobs.run_scheduled(jobs.TRAIN, _run_train)
+    jobs.run_scheduled(jobs.TRAIN, run_train)

@@ -16,7 +16,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Callable
 
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.models import JobReservation, JobRun, JobStatus, JobTrigger
 from src.common.timeutils import now_jst
 
@@ -81,8 +81,7 @@ def scheduled_run_due(
     if due_at is not None and due_at > now:
         return False
 
-    session = get_session()
-    try:
+    with session_scope() as session:
         running = (
             session.query(JobRun.id)
             .filter(
@@ -108,14 +107,11 @@ def scheduled_run_due(
         if interval_minutes is None:
             return False
         return latest.started_at <= now - timedelta(minutes=interval_minutes)
-    finally:
-        session.close()
 
 
 def enqueue(job_name: str, params: dict | None = None) -> dict:
     """ジョブの実行を依頼する。同名ジョブが実行待ち/実行中なら新規追加しない。"""
-    session = get_session()
-    try:
+    with session_scope() as session:
         existing = (
             session.query(JobRun)
             .filter(
@@ -137,14 +133,11 @@ def enqueue(job_name: str, params: dict | None = None) -> dict:
         session.add(run)
         session.commit()
         return {"id": run.id, "status": run.status, "queued": True}
-    finally:
-        session.close()
 
 
 def reserve(job_name: str, run_at, params: dict | None = None) -> dict:
     """指定日時に1回だけジョブを投入する予約を作成する。"""
-    session = get_session()
-    try:
+    with session_scope() as session:
         reservation = JobReservation(
             job_name=job_name,
             run_at=run_at,
@@ -154,13 +147,10 @@ def reserve(job_name: str, run_at, params: dict | None = None) -> dict:
         session.add(reservation)
         session.commit()
         return _reservation_to_dict(reservation)
-    finally:
-        session.close()
 
 
 def list_reservations(limit: int = 100) -> list[dict]:
-    session = get_session()
-    try:
+    with session_scope() as session:
         rows = (
             session.query(JobReservation)
             .order_by(JobReservation.run_at.desc(), JobReservation.id.desc())
@@ -168,13 +158,10 @@ def list_reservations(limit: int = 100) -> list[dict]:
             .all()
         )
         return [_reservation_to_dict(row) for row in rows]
-    finally:
-        session.close()
 
 
 def cancel_reservation(reservation_id: int) -> bool:
-    session = get_session()
-    try:
+    with session_scope() as session:
         reservation = session.get(JobReservation, reservation_id)
         if reservation is None or reservation.status != RESERVATION_PENDING:
             return False
@@ -182,16 +169,13 @@ def cancel_reservation(reservation_id: int) -> bool:
         reservation.cancelled_at = now_jst()
         session.commit()
         return True
-    finally:
-        session.close()
 
 
 def enqueue_due_reservations(job_names: list[str]) -> int:
     """期限到来した予約を通常の queued job_runs に変換する。"""
     now = now_jst()
-    session = get_session()
     queued_count = 0
-    try:
+    with session_scope() as session:
         blocked_names = {
             row.job_name
             for row in session.query(JobRun.job_name)
@@ -230,15 +214,12 @@ def enqueue_due_reservations(job_names: list[str]) -> int:
             claimed_names.add(reservation.job_name)
             queued_count += 1
         session.commit()
-    finally:
-        session.close()
     return queued_count
 
 
 def stop_queued(run_id: int) -> bool:
     """queuedの手動ジョブを停止する。実行中ジョブは安全に中断できないため対象外。"""
-    session = get_session()
-    try:
+    with session_scope() as session:
         run = session.get(JobRun, run_id)
         if run is None or run.status != JobStatus.QUEUED.value:
             return False
@@ -247,8 +228,6 @@ def stop_queued(run_id: int) -> bool:
         run.finished_at = now_jst()
         session.commit()
         return True
-    finally:
-        session.close()
 
 
 def run_scheduled(job_name: str, func: Handler) -> None:
@@ -259,8 +238,7 @@ def run_scheduled(job_name: str, func: Handler) -> None:
 
 def process_queued(handlers: dict[str, Handler]) -> None:
     """queuedのジョブをclaimして実行する(各サービスのポーリングジョブから呼ぶ)。"""
-    session = get_session()
-    try:
+    with session_scope() as session:
         running_names = {
             row.job_name
             for row in session.query(JobRun.job_name)
@@ -291,8 +269,6 @@ def process_queued(handlers: dict[str, Handler]) -> None:
             run.started_at = now_jst()
             claimed.append((run.id, run.job_name, _parse_params(run.params)))
         session.commit()
-    finally:
-        session.close()
 
     for run_id, job_name, params in claimed:
         _execute(run_id, job_name, handlers[job_name], params)
@@ -300,8 +276,7 @@ def process_queued(handlers: dict[str, Handler]) -> None:
 
 def recover_stale(job_names: list[str]) -> None:
     """サービス起動時に、前回の異常終了で残ったrunning行をfailedにする。"""
-    session = get_session()
-    try:
+    with session_scope() as session:
         stale_runs = (
             session.query(JobRun)
             .filter(
@@ -315,8 +290,6 @@ def recover_stale(job_names: list[str]) -> None:
             run.detail = "サービスの再起動により中断されました"
             run.finished_at = now_jst()
         session.commit()
-    finally:
-        session.close()
 
 
 def _parse_params(raw: str | None) -> dict:
@@ -346,8 +319,7 @@ def _reservation_to_dict(reservation: JobReservation) -> dict:
 
 
 def _create_running(job_name: str, trigger: str) -> int:
-    session = get_session()
-    try:
+    with session_scope() as session:
         run = JobRun(
             job_name=job_name,
             trigger=trigger,
@@ -357,13 +329,10 @@ def _create_running(job_name: str, trigger: str) -> int:
         session.add(run)
         session.commit()
         return run.id
-    finally:
-        session.close()
 
 
 def _finish(run_id: int, status: str, detail: str | None) -> None:
-    session = get_session()
-    try:
+    with session_scope() as session:
         run = session.get(JobRun, run_id)
         if run is None:
             return
@@ -371,8 +340,6 @@ def _finish(run_id: int, status: str, detail: str | None) -> None:
         run.detail = (detail or "")[:2000]
         run.finished_at = now_jst()
         session.commit()
-    finally:
-        session.close()
 
 
 def _execute(run_id: int, job_name: str, func: Handler, params: dict) -> None:

@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 from src.collector import scraper
-from src.common.db import get_session, init_db
+from src.common.db import init_db, session_scope
 from src.common.dynamic_config import BettingConfig, load_betting_config
 from src.common.models import Entry, Race
 from src.predictor import model as model_module
@@ -38,7 +38,7 @@ from src.predictor.history import (
     load_sire_map,
     load_trainer_history,
 )
-from src.predictor.train import _load_training_frames, build_model_bundle
+from src.predictor.train import load_training_frames, build_model_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +135,8 @@ def _evaluate(
 def run_backtest(start: date, end: date, config: BettingConfig | None = None) -> dict:
     """期間 [start, end] のバックテストを実行し、集計結果のdictを返す。"""
     config = config or load_betting_config()
-    session = get_session()
-    try:
-        train_frames, train_races = _load_training_frames(before=start)
+    with session_scope() as session:
+        train_frames, train_races = load_training_frames(before=start)
         if train_races == 0:
             return {"error": f"{start} より前の学習データがありません"}
 
@@ -203,8 +202,6 @@ def run_backtest(start: date, end: date, config: BettingConfig | None = None) ->
             "result": result,
             "sweep": sweep,
         }
-    finally:
-        session.close()
 
 
 def format_summary(report: dict) -> str:

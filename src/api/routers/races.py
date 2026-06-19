@@ -6,9 +6,9 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 
-from src.api.deps import _is_admin_request
-from src.api.serializers import _iso, _rank_entries
-from src.common.db import get_session
+from src.api.deps import is_admin_request
+from src.api.serializers import iso, rank_entries
+from src.common.db import session_scope
 from src.common.dynamic_config import load_betting_config
 from src.common.models import (
     Bet,
@@ -40,11 +40,10 @@ def list_races(
     prediction: str | None = None,
     bet: str | None = None,
 ) -> dict:
-    is_admin = _is_admin_request(request)
+    is_admin = is_admin_request(request)
     page_limit = min(max(limit, 1), 200)
     page_offset = max(offset, 0)
-    session = get_session()
-    try:
+    with session_scope() as session:
         venues = [
             row[0]
             for row in session.query(Race.venue)
@@ -138,11 +137,11 @@ def list_races(
                 {
                     "id": race.id,
                     "race_key": race.race_key,
-                    "race_date": _iso(race.race_date),
+                    "race_date": iso(race.race_date),
                     "venue": race.venue,
                     "race_number": race.race_number,
                     "race_name": race.race_name,
-                    "start_time": _iso(race.start_time),
+                    "start_time": iso(race.start_time),
                     "distance": race.distance,
                     "track_type": race.track_type,
                     "going": race.going,
@@ -155,8 +154,6 @@ def list_races(
                     ),
                 }
             )
-    finally:
-        session.close()
     return {
         "races": items,
         "total": total,
@@ -176,8 +173,7 @@ def race_dates() -> dict:
     レース一覧画面のカレンダーで、収集済み(色付け)と「開催予定だが未収集」
     (別色)を区別するために両方返す。
     """
-    session = get_session()
-    try:
+    with session_scope() as session:
         collected = [
             row[0].isoformat()
             for row in session.query(Race.race_date)
@@ -193,15 +189,12 @@ def race_dates() -> dict:
             .all()
         ]
         return {"collected": collected, "scheduled": scheduled}
-    finally:
-        session.close()
 
 
 @router.get("/api/races/{race_id}")
 def race_detail(request: Request, race_id: int) -> dict:
-    is_admin = _is_admin_request(request)
-    session = get_session()
-    try:
+    is_admin = is_admin_request(request)
+    with session_scope() as session:
         race = (
             session.query(Race)
             .options(
@@ -244,12 +237,12 @@ def race_detail(request: Request, race_id: int) -> dict:
         betting_config = load_betting_config()
         # AI順位は生スコア(較正前)で決める。較正後スコアは階段状で同値に潰れるため。
         # 生スコアが同値の馬は同順位とする(競馬の同着に相当。機械的なタイブレークはしない)。
-        ai_rank_map = _rank_entries(rank_score_map, reverse=True)
+        ai_rank_map = rank_entries(rank_score_map, reverse=True)
         value_odds_map = {
             e.id: e.pre_race_odds if e.pre_race_odds is not None else e.odds
             for e in race.entries
         }
-        odds_rank_map = _rank_entries(
+        odds_rank_map = rank_entries(
             {
                 e.id: value
                 for e in race.entries
@@ -413,18 +406,18 @@ def race_detail(request: Request, race_id: int) -> dict:
                 "model_version": b.model_version,
                 "payout": b.payout,
                 "is_settled": b.is_settled,
-                "placed_at": _iso(b.placed_at),
+                "placed_at": iso(b.placed_at),
             }
             for b in visible_bets
         ]
         return {
             "id": race.id,
             "race_key": race.race_key,
-            "race_date": _iso(race.race_date),
+            "race_date": iso(race.race_date),
             "venue": race.venue,
             "race_number": race.race_number,
             "race_name": race.race_name,
-            "start_time": _iso(race.start_time),
+            "start_time": iso(race.start_time),
             "distance": race.distance,
             "track_type": race.track_type,
             "direction": race.direction,
@@ -443,5 +436,3 @@ def race_detail(request: Request, race_id: int) -> dict:
             "bets": bets,
             "collection_status": collection_status,
         }
-    finally:
-        session.close()

@@ -10,7 +10,7 @@ from datetime import timedelta
 from src.collector import scraper
 from src.common import jobs
 from src.common.config import settings
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.dynamic_config import BettingConfig, load_betting_config, load_scheduled_job_config
 from src.common.models import Bet, BetStatus, BettingMode, Entry, Prediction, Race, RaceOdds
 from src.common.timeutils import now_jst
@@ -176,7 +176,7 @@ def _place_bets(session, bets: list[Bet], config: BettingConfig) -> int:
     return len(bets)
 
 
-def _run_predict(params: dict) -> str:
+def run_predict(params: dict) -> str:
     try:
         model_bundle = model.load_model()
     except FileNotFoundError:
@@ -186,8 +186,7 @@ def _run_predict(params: dict) -> str:
     predicted_races = 0
     skipped_existing = 0
     failed_races = 0
-    session = get_session()
-    try:
+    with session_scope() as session:
         races = (
             session.query(Race)
             .filter(
@@ -230,8 +229,6 @@ def _run_predict(params: dict) -> str:
                 session.rollback()
                 failed_races += 1
                 logger.exception("failed to predict race_key=%s", race.race_key)
-    finally:
-        session.close()
 
     summary = (
         f"対象未確定レース={target_races}件, "
@@ -243,7 +240,7 @@ def _run_predict(params: dict) -> str:
     return summary
 
 
-def _run_bet_decide(params: dict) -> str:
+def run_bet_decide(params: dict) -> str:
     config = load_betting_config()
     now = now_jst()
 
@@ -262,8 +259,7 @@ def _run_bet_decide(params: dict) -> str:
     target_minutes = _bet_decision_target_minutes(lead_minutes)
     day_cache: dict = {}
 
-    session = get_session()
-    try:
+    with session_scope() as session:
         races = (
             session.query(Race)
             .filter(
@@ -308,8 +304,6 @@ def _run_bet_decide(params: dict) -> str:
                 session.rollback()
                 failed_races += 1
                 logger.exception("failed to decide bets race_key=%s", race.race_key)
-    finally:
-        session.close()
 
     summary = (
         f"mode={config.mode}, "
@@ -325,16 +319,16 @@ def _run_bet_decide(params: dict) -> str:
     return summary
 
 
-def _run_settle(params: dict) -> str:
+def run_settle(params: dict) -> str:
     settled = settlement.settle_pending_races()
     return f"決済={settled}件"
 
 
-def _run_train(params: dict) -> str:
+def run_train(params: dict) -> str:
     return train.train_model()
 
 
-def _run_backtest(params: dict) -> str:
+def run_backtest(params: dict) -> str:
     """回収率バックテスト。paramsの日付範囲はAPI側で検証済み。"""
     from datetime import date
 

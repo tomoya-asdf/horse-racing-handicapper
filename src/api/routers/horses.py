@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, HTTPException
 
-from src.api.serializers import _iso
-from src.common.db import get_session
+from src.api.serializers import iso
+from src.common.db import session_scope
 from src.common.models import Entry, Horse, HorsePedigree, HorseResult
 
 router = APIRouter()
@@ -11,8 +11,7 @@ router = APIRouter()
 
 @router.get("/api/horses/{horse_id}")
 def horse_detail(horse_id: str) -> dict:
-    session = get_session()
-    try:
+    with session_scope() as session:
         horse = session.get(Horse, horse_id)
         results = (
             session.query(HorseResult)
@@ -33,7 +32,7 @@ def horse_detail(horse_id: str) -> dict:
             name = horse.name if horse else None
             sire_id = horse.sire_id if horse else None
             sire_name = horse.sire_name if horse else None
-            results_fetched_at = _iso(horse.results_fetched_at) if horse else None
+            results_fetched_at = iso(horse.results_fetched_at) if horse else None
 
         pedigree = (
             session.query(HorsePedigree)
@@ -81,5 +80,3 @@ def horse_detail(horse_id: str) -> dict:
                 for r in results
             ],
         }
-    finally:
-        session.close()

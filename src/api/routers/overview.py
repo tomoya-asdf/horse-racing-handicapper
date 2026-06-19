@@ -3,10 +3,10 @@
 from fastapi import APIRouter, Request
 from sqlalchemy import func
 
-from src.api.deps import _is_admin_request
-from src.api.serializers import _bet_stats, _iso, _job_to_dict, _model_info
+from src.api.deps import is_admin_request
+from src.api.serializers import bet_stats, iso, job_to_dict, model_info
 from src.common import jobs
-from src.common.db import get_session
+from src.common.db import session_scope
 from src.common.dynamic_config import get_settings_view
 from src.common.models import (
     Bet,
@@ -25,9 +25,8 @@ router = APIRouter()
 
 @router.get("/api/overview")
 def overview(request: Request) -> dict:
-    is_admin = _is_admin_request(request)
-    session = get_session()
-    try:
+    is_admin = is_admin_request(request)
+    with session_scope() as session:
         race_count = session.query(func.count(Race.id)).scalar() or 0
         finished_race_count = (
             session.query(func.count(func.distinct(Entry.race_id)))
@@ -85,7 +84,7 @@ def overview(request: Request) -> dict:
             visible_modes.append(BettingMode.PROD.value)
         for mode in visible_modes:
             bets = session.query(Bet).filter(Bet.mode == mode).all()
-            modes[mode] = _bet_stats(bets)
+            modes[mode] = bet_stats(bets)
 
         latest_jobs = []
         for job_name in jobs.ALL_JOBS:
@@ -96,13 +95,11 @@ def overview(request: Request) -> dict:
                 .first()
             )
             if run is not None:
-                latest_jobs.append(_job_to_dict(run))
-        model_info = _model_info(session)
-    finally:
-        session.close()
+                latest_jobs.append(job_to_dict(run))
+        model_summary = model_info(session)
 
     return {
-        "model": model_info,
+        "model": model_summary,
         "data": {
             "race_count": race_count,
             "finished_race_count": finished_race_count,
@@ -113,7 +110,7 @@ def overview(request: Request) -> dict:
             "horse_target_race_count": race_count,
             "upcoming_race_count": upcoming_race_count,
             "predicted_upcoming_race_count": predicted_upcoming_race_count,
-            "last_collected_at": _iso(last_collected_at),
+            "last_collected_at": iso(last_collected_at),
         },
         "modes": modes,
         "latest_jobs": latest_jobs,

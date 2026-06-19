@@ -44,6 +44,14 @@ _session = requests.Session()
 _session.headers.update({"User-Agent": USER_AGENT})
 
 
+class _RetryableStatus(Exception):
+    """一時的なHTTPステータス(5xx/429)を受け取ったことを表す内部例外。"""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"retryable status: {status_code}")
+        self.status_code = status_code
+
+
 @dataclass
 class ScrapeMetrics:
     http_requests: int = 0
@@ -83,23 +91,51 @@ def _log_metrics(label: str, started_at: float, start: ScrapeMetrics) -> None:
     )
 
 
+# 一時的とみなしてリトライ対象にするHTTPステータス(サーバ側の過負荷・保護)
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
 class NetkeibaHttpClient:
     def __init__(self) -> None:
         self.session = _session
 
     def get(self, url: str, **kwargs) -> requests.Response:
-        response = self.session.get(url, timeout=10, **kwargs)
-        _metrics.http_requests += 1
-        response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "").lower()
-        if "text/html" in content_type and not re.search(r"charset=[\w-]", content_type):
-            # netkeibaは「Content-Type: text/html; charset=」とcharsetを空で返す。
-            # このときrequestsはencoding=""(不明)のままUTF-8で強制デコードして
-            # 文字化けする。さらにページによりUTF-8(レース一覧)とEUC-JP(出馬表・
-            # 結果)が混在するため、決め打ちせず内容から自動判定する
-            response.encoding = response.apparent_encoding
-        time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
-        return response
+        # 一時的な失敗(接続断・タイムアウト・5xx/429)は指数バックオフで再試行する。
+        # netkeibaのDOM変更等による恒久的失敗(404など)は即座に送出して気付けるようにする。
+        attempts = settings.SCRAPER_MAX_RETRIES + 1
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                response = self.session.get(url, timeout=10, **kwargs)
+                _metrics.http_requests += 1
+                if response.status_code in _RETRYABLE_STATUS and attempt < attempts - 1:
+                    raise _RetryableStatus(response.status_code)
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "text/html" in content_type and not re.search(r"charset=[\w-]", content_type):
+                    # netkeibaは「Content-Type: text/html; charset=」とcharsetを空で返す。
+                    # このときrequestsはencoding=""(不明)のままUTF-8で強制デコードして
+                    # 文字化けする。さらにページによりUTF-8(レース一覧)とEUC-JP(出馬表・
+                    # 結果)が混在するため、決め打ちせず内容から自動判定する
+                    response.encoding = response.apparent_encoding
+                time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
+                return response
+            except (requests.exceptions.RequestException, _RetryableStatus) as exc:
+                last_exc = exc
+                if attempt >= attempts - 1:
+                    break
+                backoff = settings.SCRAPER_RETRY_BACKOFF_SECONDS * (2**attempt)
+                logger.warning(
+                    "netkeiba request failed (attempt %d/%d), retrying in %.1fs: %s url=%s",
+                    attempt + 1,
+                    attempts,
+                    backoff,
+                    exc,
+                    url,
+                )
+                time.sleep(backoff)
+        assert last_exc is not None
+        raise last_exc
 
 
 _http = NetkeibaHttpClient()

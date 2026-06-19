@@ -7,8 +7,9 @@
   webui コンテナに docker.sock を渡さないため、デプロイはこのスクリプトが
   ホスト上で担当する。WebUI とは共有ボリューム ./data 上の JSON でやりとりする。
 
-    - data/deploy_request.json : WebUI が書く依頼。本スクリプトが処理後に削除する。
-    - data/deploy_status.json  : 本スクリプトが書く状態(現在バージョン/更新有無/進捗)。
+    - data/deploy_request.json  : WebUI が書くデプロイ依頼。本スクリプトが処理後に削除する。
+    - data/restart_request.json : WebUI が書く再起動依頼。本スクリプトが処理後に削除する。
+    - data/deploy_status.json   : 本スクリプトが書く状態(現在バージョン/更新有無/進捗)。
 
   コンテナを丸ごと作り直しても、このスクリプトはホスト上で動き続けるため安全に
   全スタックを更新できる。git と docker(Docker Desktop)がホストで使えることが前提。
@@ -31,6 +32,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DataDir = Join-Path $RepoRoot "data"
 $StatusFile = Join-Path $DataDir "deploy_status.json"
 $RequestFile = Join-Path $DataDir "deploy_request.json"
+$RestartRequestFile = Join-Path $DataDir "restart_request.json"
 
 if (-not (Test-Path $DataDir)) { New-Item -ItemType Directory -Path $DataDir | Out-Null }
 
@@ -98,6 +100,24 @@ function Run-Deploy {
     Write-Status -State "success" -UpdateAvailable $false -CurrentRef $Ref -CurrentSha (Get-LocalSha) -RemoteSha (Get-RemoteSha $Ref)
 }
 
+function Run-Restart {
+    param([string]$Ref)
+    $script:lastDeployAt = Now-Iso
+    Write-Status -State "running" -UpdateAvailable $false -CurrentRef $Ref -CurrentSha (Get-LocalSha) -RemoteSha (Get-RemoteSha $Ref)
+
+    $o = & docker compose -f (Join-Path $RepoRoot "docker-compose.yml") restart collector predictor webui 2>&1
+    $out = ($o -join "`n")
+    if ($LASTEXITCODE -ne 0) {
+        $script:lastDeployResult = "failed"
+        $script:lastMessage = "[restart] 失敗:`n" + $out
+        Write-Status -State "failed" -UpdateAvailable $false -CurrentRef $Ref -CurrentSha (Get-LocalSha) -RemoteSha (Get-RemoteSha $Ref)
+        return
+    }
+    $script:lastDeployResult = "success"
+    $script:lastMessage = "再起動成功:`n" + $out
+    Write-Status -State "success" -UpdateAvailable $false -CurrentRef $Ref -CurrentSha (Get-LocalSha) -RemoteSha (Get-RemoteSha $Ref)
+}
+
 function Get-LocalSha { (Invoke-Git @("rev-parse", "--short", "HEAD")).Out.Trim() }
 function Get-Ref { (Invoke-Git @("rev-parse", "--abbrev-ref", "HEAD")).Out.Trim() }
 function Get-RemoteSha {
@@ -122,6 +142,11 @@ while ($true) {
             Remove-Item $RequestFile -Force
             Write-Host "$(Now-Iso) deploy requested -> running"
             Run-Deploy -Ref $ref
+        }
+        elseif (Test-Path $RestartRequestFile) {
+            Remove-Item $RestartRequestFile -Force
+            Write-Host "$(Now-Iso) restart requested -> running"
+            Run-Restart -Ref $ref
         }
         else {
             $state = if ($script:lastDeployResult) { $script:lastDeployResult } else { "idle" }
