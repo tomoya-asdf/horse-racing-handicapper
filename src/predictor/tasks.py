@@ -108,6 +108,23 @@ def _save_race_odds(session, race: Race, odds_by_type: dict[str, dict[str, float
     session.flush()
 
 
+def _refresh_race_day_inputs(session, race: Race, day_cache: dict) -> None:
+    """当日データ(単勝オッズ・馬体重・複勝/馬連/ワイドのオッズ)を取り込んで保存する。
+
+    馬体重(当日計量)と全券種オッズは発走直前まで出ないため、発走が近いレースだけ
+    ここで取得し、最新データで再予測できるようにする。スクレイピング失敗で再予測
+    自体が止まらないよう、失敗時はロールバックしてログのみとする(直近の保存値で予測)。
+    """
+    try:
+        _refresh_race_odds(session, race, day_cache)
+        odds_by_type = scraper.fetch_supported_odds(race.race_key)
+        _save_race_odds(session, race, odds_by_type)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("failed to refresh race-day inputs race_key=%s", race.race_key)
+
+
 def _predict_race(
     race: Race,
     model_bundle: dict,
@@ -123,16 +140,24 @@ def _predict_race(
     )
     raw_scores, scores = model.predict_scores(model_bundle, build_features(entries_df))
 
+    version = model_bundle["version"]
+    # (entry_id, model_version) は一意。当日データでの再予測時はスコアを上書きする。
+    existing = {
+        p.entry_id: p
+        for p in session.query(Prediction)
+        .filter_by(race_id=race.id, model_version=version)
+        .all()
+    }
     predictions = []
-    for entry_id, score in scores.items():
-        prediction = Prediction(
-            race_id=race.id,
-            entry_id=int(entry_id),
-            model_version=model_bundle["version"],
-            score=float(score),
-            raw_score=float(raw_scores[entry_id]),
-        )
-        session.add(prediction)
+    for raw_entry_id, score in scores.items():
+        entry_id = int(raw_entry_id)
+        prediction = existing.get(entry_id)
+        if prediction is None:
+            prediction = Prediction(race_id=race.id, entry_id=entry_id, model_version=version)
+            session.add(prediction)
+        prediction.score = float(score)
+        prediction.raw_score = float(raw_scores[raw_entry_id])
+        prediction.created_at = now_jst()  # 再予測時も最新予測として扱う
         predictions.append(prediction)
     return predictions
 
@@ -184,8 +209,10 @@ def run_predict(params: dict) -> str:
 
     target_races = 0
     predicted_races = 0
+    repredicted_races = 0
     skipped_existing = 0
     failed_races = 0
+    day_cache: dict = {}
     with session_scope() as session:
         races = (
             session.query(Race)
@@ -201,6 +228,9 @@ def run_predict(params: dict) -> str:
         sire_map = load_sire_map(session)
         jockey_history = load_jockey_history(session)
         trainer_history = load_trainer_history(session)
+        finalize_cutoff = now_jst() + timedelta(
+            minutes=settings.RACE_DAY_FINALIZE_WINDOW_MINUTES
+        )
         for race in races:
             if not _is_unfinished_race(race):
                 continue
@@ -210,8 +240,14 @@ def run_predict(params: dict) -> str:
                     session.query(Prediction.id)
                     .filter_by(race_id=race.id, model_version=model_bundle["version"])
                     .first()
+                    is not None
                 )
-                if existing is not None:
+                # 発走が近いレースは、当日にしか出ない馬体重と全券種オッズを取り込んでから
+                # 再予測する(馬体重は特徴量のため、未取得時に出した予測を出し直す)。
+                in_finalize_window = race.start_time <= finalize_cutoff
+                if in_finalize_window:
+                    _refresh_race_day_inputs(session, race, day_cache)
+                elif existing:
                     skipped_existing += 1
                     continue
                 _predict_race(
@@ -224,7 +260,10 @@ def run_predict(params: dict) -> str:
                     trainer_history,
                 )
                 session.commit()
-                predicted_races += 1
+                if in_finalize_window and existing:
+                    repredicted_races += 1
+                else:
+                    predicted_races += 1
             except Exception:
                 session.rollback()
                 failed_races += 1
@@ -233,6 +272,7 @@ def run_predict(params: dict) -> str:
     summary = (
         f"対象未確定レース={target_races}件, "
         f"新規予測={predicted_races}件, "
+        f"当日再予測={repredicted_races}件, "
         f"既存予測あり={skipped_existing}件"
     )
     if failed_races:

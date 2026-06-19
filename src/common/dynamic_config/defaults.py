@@ -37,7 +37,7 @@ SCHEDULED_JOB_DEFS = (
         "time_key": "schedule_predict_time",
         "days_key": "schedule_predict_days",
         "label": "AI予想",
-        "description": "未確定レースに予測スコアを保存します。",
+        "description": "未確定レースに予測スコアを保存します。発走が近いレースは最新オッズ(複勝/馬連/ワイド含む)と馬体重を取り込んで再予測します。",
         "default_interval": settings.PREDICT_INTERVAL_MINUTES,
     },
     {

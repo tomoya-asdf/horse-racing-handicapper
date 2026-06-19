@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     BET_DECISION_LEAD_MINUTES: int = Field(default=10, ge=0)
     SETTLE_DELAY_MINUTES: int = Field(default=20, ge=0)
 
+    # 発走がこの分数以内に迫ったレースは、AI予想時に当日データ
+    # (単勝/複勝/馬連/ワイドのオッズ・馬体重)を取り込んだうえで再予測する。
+    # 馬体重(当日計量)が入った最新データでスコアを出し直すための窓。
+    RACE_DAY_FINALIZE_WINDOW_MINUTES: int = Field(default=60, ge=1)
+
     # 賭け戦略
     BET_AMOUNT: float = 100
     BET_SCORE_THRESHOLD: float = Field(default=0.15, ge=0.0, le=1.0)
