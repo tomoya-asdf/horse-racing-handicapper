@@ -120,17 +120,27 @@ def _update_finished_results() -> int:
                 (item for item in day_cache[race.race_date] if item["race_key"] == race.race_key),
                 None,
             )
-            final_odds_by_number = {
-                item["horse_number"]: item.get("odds")
-                for item in latest["entries"]
-                if item.get("odds") is not None
-            } if latest is not None else {}
+            latest_by_number = (
+                {item["horse_number"]: item for item in latest["entries"]}
+                if latest is not None
+                else {}
+            )
             for entry in race.entries:
                 if entry.horse_number in positions:
                     entry.finish_position = positions[entry.horse_number]
-                if entry.horse_number in final_odds_by_number:
-                    entry.final_odds = final_odds_by_number[entry.horse_number]
-                    entry.odds = final_odds_by_number[entry.horse_number]
+                latest_entry = latest_by_number.get(entry.horse_number)
+                if latest_entry is None:
+                    continue
+                # 確定オッズ。発走後の収集で取得した最終オッズで上書きする
+                if latest_entry.get("odds") is not None:
+                    entry.final_odds = latest_entry["odds"]
+                    entry.odds = latest_entry["odds"]
+                # 馬体重は当日計量のため発走直前まで取得できないことが多い。
+                # 発走後の収集で初めて取れることがあるため、ここでも更新する
+                if latest_entry.get("horse_weight") is not None:
+                    entry.horse_weight = latest_entry["horse_weight"]
+                if latest_entry.get("horse_weight_diff") is not None:
+                    entry.horse_weight_diff = latest_entry["horse_weight_diff"]
             updated += 1
 
         session.commit()
