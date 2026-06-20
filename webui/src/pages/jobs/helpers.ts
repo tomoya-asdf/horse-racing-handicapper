@@ -28,6 +28,8 @@ export const JOB_OPTIONS = [
 export const JOB_BUTTONS = JOB_OPTIONS.filter(
   (job) => job.name !== "backfill" && job.name !== "backtest"
 );
+// ジョブ予約のプルダウン専用の擬似ジョブ。複数の backfill 予約へ自動分割して投入する。
+export const LONG_BACKFILL = "long_backfill";
 export const RANGE_JOB_NAMES = new Set(["backfill", "backtest"]);
 export const BACKFILL_MAX_DAYS = 31;
 export const RESERVATION_PAGE_SIZE = 5;

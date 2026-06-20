@@ -15,6 +15,9 @@ import type { AuthStatus, BetsResponse } from "../types";
 
 export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
   const [mode, setMode] = useState<"sim" | "prod">("sim");
+  const [year, setYear] = useState("");
+  const [month, setMonth] = useState("");
+  const [modelVersion, setModelVersion] = useState("");
   const canViewProd = Boolean(auth?.authenticated);
 
   useEffect(() => {
@@ -23,11 +26,22 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
     }
   }, [canViewProd, mode]);
 
+  const params = new URLSearchParams({ mode });
+  if (year) params.set("year", year);
+  if (month) params.set("month", month);
+  if (modelVersion) params.set("model_version", modelVersion);
+  const query = params.toString();
   const { data, error } = usePolling<BetsResponse>(
-    () => getJSON(`/api/bets?mode=${mode}`),
+    () => getJSON(`/api/bets?${query}`),
     15000,
-    [mode]
+    [query]
   );
+
+  const clearFilters = () => {
+    setYear("");
+    setMonth("");
+    setModelVersion("");
+  };
 
   return (
     <div>
@@ -45,6 +59,44 @@ export default function BetsPage({ auth }: { auth: AuthStatus | null }) {
             本番
           </button>
         </div>
+      </div>
+      <div className="bets-filters">
+        <label>
+          <span>年</span>
+          <select value={year} onChange={(e) => setYear(e.target.value)}>
+            <option value="">すべて</option>
+            {(data?.filters.years ?? []).map((y) => (
+              <option key={y} value={y}>
+                {y}年
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>月</span>
+          <select value={month} onChange={(e) => setMonth(e.target.value)}>
+            <option value="">すべて</option>
+            {Array.from({ length: 12 }, (_, index) => index + 1).map((m) => (
+              <option key={m} value={String(m).padStart(2, "0")}>
+                {m}月
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>モデル</span>
+          <select value={modelVersion} onChange={(e) => setModelVersion(e.target.value)}>
+            <option value="">すべて</option>
+            {(data?.filters.models ?? []).map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="secondary" onClick={clearFilters}>
+          クリア
+        </button>
       </div>
       <ErrorNote message={error} />
       {!data ? (

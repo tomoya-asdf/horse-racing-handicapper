@@ -6,6 +6,7 @@ import {
   HISTORY_PAGE_SIZE,
   JOB_BUTTONS,
   JOB_OPTIONS,
+  LONG_BACKFILL,
   RANGE_JOB_NAMES,
   addMinutesToLocalDateTime,
   buildLongBackfillChunks,
@@ -39,10 +40,10 @@ export default function JobsPage() {
   const [reservationPage, setReservationPage] = useState(0);
   const [longBackfillStartMonth, setLongBackfillStartMonth] = useState(isoMonthsAgo(24));
   const [longBackfillEndMonth, setLongBackfillEndMonth] = useState(isoMonthsAgo(0));
-  const [longBackfillRunAt, setLongBackfillRunAt] = useState(localDateTimeIn(10));
   const [longBackfillGapMinutes, setLongBackfillGapMinutes] = useState("15");
   const [longBackfillBusy, setLongBackfillBusy] = useState(false);
 
+  const isLongBackfill = reservationJob === LONG_BACKFILL;
   const selectedReservationJob = JOB_OPTIONS.find((job) => job.name === reservationJob);
   const reservationNeedsRange = RANGE_JOB_NAMES.has(reservationJob);
   const longBackfillChunks = buildLongBackfillChunks(
@@ -51,8 +52,8 @@ export default function JobsPage() {
   );
   const longBackfillGap = Math.max(1, Number(longBackfillGapMinutes) || 1);
   const longBackfillLastRunAt =
-    longBackfillRunAt.includes("T") && longBackfillChunks.length > 0
-      ? addMinutesToLocalDateTime(longBackfillRunAt, (longBackfillChunks.length - 1) * longBackfillGap)
+    reservationRunAt.includes("T") && longBackfillChunks.length > 0
+      ? addMinutesToLocalDateTime(reservationRunAt, (longBackfillChunks.length - 1) * longBackfillGap)
       : "-";
   const reservations = (data?.reservations ?? []).filter(
     (reservation) => reservation.status !== "cancelled"
@@ -108,15 +109,15 @@ export default function JobsPage() {
       setActionError("予約対象の期間を作成できませんでした。");
       return;
     }
-    if (!longBackfillRunAt.includes("T")) {
-      setActionError("予約開始日時を入力してください。");
+    if (!reservationRunAt.includes("T")) {
+      setActionError("実行日時を入力してください。");
       return;
     }
 
     const ok = window.confirm(
       `過去データ取得を${longBackfillChunks.length}件に分割して予約しますか?\n` +
         `${firstChunk.start_date} - ${lastChunk.end_date}\n` +
-        `${longBackfillRunAt} から ${longBackfillGap}分間隔で投入します。`
+        `${reservationRunAt} から ${longBackfillGap}分間隔で投入します。`
     );
     if (!ok) return;
 
@@ -125,7 +126,7 @@ export default function JobsPage() {
       for (const [index, chunk] of longBackfillChunks.entries()) {
         await postJSON("/api/job-reservations", {
           job_name: "backfill",
-          run_at: addMinutesToLocalDateTime(longBackfillRunAt, index * longBackfillGap),
+          run_at: addMinutesToLocalDateTime(reservationRunAt, index * longBackfillGap),
           params: chunk,
         });
       }
@@ -213,68 +214,6 @@ export default function JobsPage() {
         </button>
       </div>
 
-      <h2>長期バックフィル予約</h2>
-      <p className="muted">
-        1回31日以内の過去データ取得に自動分割して予約します。複数年分をまとめて準備したいときに使います。
-      </p>
-      <div className="backfill-form reservation-form long-backfill-form">
-        <label>
-          <span>開始年月</span>
-          <input
-            type="month"
-            value={longBackfillStartMonth}
-            onChange={(e) => setLongBackfillStartMonth(e.target.value)}
-          />
-        </label>
-        <label>
-          <span>終了年月</span>
-          <input
-            type="month"
-            value={longBackfillEndMonth}
-            onChange={(e) => setLongBackfillEndMonth(e.target.value)}
-          />
-        </label>
-        <label>
-          <span>予約開始日時</span>
-          <input
-            type="datetime-local"
-            value={longBackfillRunAt}
-            onChange={(e) => setLongBackfillRunAt(e.target.value)}
-          />
-        </label>
-        <label>
-          <span>予約間隔(分)</span>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={longBackfillGapMinutes}
-            onChange={(e) => setLongBackfillGapMinutes(e.target.value)}
-          />
-        </label>
-        <div className="long-backfill-preview">
-          {longBackfillChunks.length === 0 ? (
-            <span>取得期間が正しくありません(開始年月 ≦ 終了年月)</span>
-          ) : (
-            <>
-              <span>{longBackfillChunks.length.toLocaleString()}件に分割</span>
-              <span>
-                {longBackfillChunks[0]?.start_date} -{" "}
-                {longBackfillChunks[longBackfillChunks.length - 1]?.end_date}
-              </span>
-              <span>最終予約: {longBackfillLastRunAt}</span>
-            </>
-          )}
-        </div>
-        <button
-          className="primary"
-          disabled={longBackfillBusy || longBackfillChunks.length === 0}
-          onClick={() => void reserveLongBackfill()}
-        >
-          長期取得を予約
-        </button>
-      </div>
-
       <h2>回収率バックテスト</h2>
       <p className="muted">
         指定期間の確定レースで、予測、賭け、決済をシミュレートします。結果は実行履歴に表示されます。
@@ -308,10 +247,11 @@ export default function JobsPage() {
       <h2>ジョブ予約</h2>
       <p className="muted">
         実行日時を指定して、1回だけジョブを自動投入します。過去データ取得と回収率バックテストは期間指定が必要です。
+        長期バックフィルは年月範囲を1回31日以内へ自動分割し、実行日時から指定間隔で順次投入します。
       </p>
-      <div className="backfill-form reservation-form">
+      <div className={`backfill-form reservation-form${isLongBackfill ? " long-backfill-form" : ""}`}>
         <label>
-          <span>実行日時</span>
+          <span>{isLongBackfill ? "実行開始日時" : "実行日時"}</span>
           <input
             type="datetime-local"
             value={reservationRunAt}
@@ -326,6 +266,7 @@ export default function JobsPage() {
                 {job.label}
               </option>
             ))}
+            <option value={LONG_BACKFILL}>長期バックフィル</option>
           </select>
         </label>
         {reservationNeedsRange && (
@@ -348,9 +289,63 @@ export default function JobsPage() {
             </label>
           </>
         )}
-        <button className="primary" onClick={() => void reserveJob()}>
-          予約する
-        </button>
+        {isLongBackfill && (
+          <>
+            <label>
+              <span>開始年月</span>
+              <input
+                type="month"
+                value={longBackfillStartMonth}
+                onChange={(e) => setLongBackfillStartMonth(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>終了年月</span>
+              <input
+                type="month"
+                value={longBackfillEndMonth}
+                onChange={(e) => setLongBackfillEndMonth(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>予約間隔(分)</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={longBackfillGapMinutes}
+                onChange={(e) => setLongBackfillGapMinutes(e.target.value)}
+              />
+            </label>
+            <div className="long-backfill-preview">
+              {longBackfillChunks.length === 0 ? (
+                <span>取得期間が正しくありません(開始年月 ≦ 終了年月)</span>
+              ) : (
+                <>
+                  <span>{longBackfillChunks.length.toLocaleString()}件に分割</span>
+                  <span>
+                    {longBackfillChunks[0]?.start_date} -{" "}
+                    {longBackfillChunks[longBackfillChunks.length - 1]?.end_date}
+                  </span>
+                  <span>最終予約: {longBackfillLastRunAt}</span>
+                </>
+              )}
+            </div>
+          </>
+        )}
+        {isLongBackfill ? (
+          <button
+            className="primary"
+            disabled={longBackfillBusy || longBackfillChunks.length === 0}
+            onClick={() => void reserveLongBackfill()}
+          >
+            長期取得を予約
+          </button>
+        ) : (
+          <button className="primary" onClick={() => void reserveJob()}>
+            予約する
+          </button>
+        )}
       </div>
 
       {message && <div className="info-note">{message}</div>}

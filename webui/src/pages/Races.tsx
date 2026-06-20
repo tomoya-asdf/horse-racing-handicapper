@@ -101,14 +101,6 @@ export default function RacesPage() {
 
       <h2>レース一覧</h2>
       <div className="race-filters">
-          <label>
-            <span>レース名</span>
-            <input
-              value={filters.race_name}
-              onChange={(e) => updateFilter("race_name", e.target.value)}
-              placeholder="レース名で検索"
-            />
-          </label>
           <div className="race-filter-field">
             <span>日付</span>
             <RaceDateField
@@ -116,6 +108,17 @@ export default function RacesPage() {
               onChange={(value) => updateFilter("race_date", value)}
             />
           </div>
+          <label>
+            <span>競馬場</span>
+            <select value={filters.venue} onChange={(e) => updateFilter("venue", e.target.value)}>
+              <option value="">すべて</option>
+              {(data?.venues ?? []).map((venue) => (
+                <option key={venue} value={venue}>
+                  {venue}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             <span>R</span>
             <select
@@ -131,17 +134,6 @@ export default function RacesPage() {
             </select>
           </label>
           <label>
-            <span>競馬場</span>
-            <select value={filters.venue} onChange={(e) => updateFilter("venue", e.target.value)}>
-              <option value="">すべて</option>
-              {(data?.venues ?? []).map((venue) => (
-                <option key={venue} value={venue}>
-                  {venue}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
             <span>状態</span>
             <select value={filters.status} onChange={(e) => updateFilter("status", e.target.value)}>
               <option value="">すべて</option>
@@ -149,6 +141,14 @@ export default function RacesPage() {
               <option value="finished">確定</option>
               <option value="unfinished">未確定</option>
             </select>
+          </label>
+          <label>
+            <span>レース名</span>
+            <input
+              value={filters.race_name}
+              onChange={(e) => updateFilter("race_name", e.target.value)}
+              placeholder="レース名で検索"
+            />
           </label>
           <label>
             <span>馬名</span>
@@ -164,6 +164,14 @@ export default function RacesPage() {
               value={filters.jockey}
               onChange={(e) => updateFilter("jockey", e.target.value)}
               placeholder="騎手名で絞り込み"
+            />
+          </label>
+          <label>
+            <span>厩舎</span>
+            <input
+              value={filters.trainer}
+              onChange={(e) => updateFilter("trainer", e.target.value)}
+              placeholder="厩舎名で絞り込み"
             />
           </label>
           <label>
@@ -184,14 +192,6 @@ export default function RacesPage() {
               <option value="yes">買いあり</option>
               <option value="no">買いなし</option>
             </select>
-          </label>
-          <label className="trainer-filter">
-            <span>厩舎</span>
-            <input
-              value={filters.trainer}
-              onChange={(e) => updateFilter("trainer", e.target.value)}
-              placeholder="厩舎名で絞り込み"
-            />
           </label>
           <button className="secondary" onClick={clearFilters}>
             クリア

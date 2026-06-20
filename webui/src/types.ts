@@ -502,4 +502,5 @@ export interface BetsResponse {
   stats: BetStats;
   bets: BetItem[];
   cumulative: CumulativePoint[];
+  filters: { years: string[]; models: string[] };
 }
