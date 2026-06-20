@@ -1,6 +1,6 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
 # horse-racing-handicapper
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 競馬レースデータを収集し、AI 予想、買い目判定、結果反映を Web UI から操作するローカル運用向けアプリケーションです。
 
@@ -29,8 +29,16 @@ docs/            設計ドキュメント
 
 1. `.env.example` を `.env` にコピーする
 
+   Windows (PowerShell):
+
    ```powershell
    Copy-Item .env.example .env
+   ```
+
+   Linux / macOS (bash):
+
+   ```bash
+   cp .env.example .env
    ```
 
 1. .envを編集して、管理者パスワードを変更する
@@ -52,7 +60,7 @@ docs/            設計ドキュメント
 
    ※ 管理コンソール(8000)とPostgreSQL(5432)はループバックアドレス(127.0.0.1)のみに
    公開しています。他の端末からアクセスする必要がある場合のみ `docker-compose.yml` の
-   `ports` を変更してください（認証は無いため、公開範囲の変更は慎重に）。
+   `ports` を変更してください。
 
 ## 注意
 
@@ -60,7 +68,3 @@ docs/            設計ドキュメント
 - 馬・騎手・調教師の過去戦績の収集件数を増やすと外部サイトへのアクセスも増えます。`SCRAPER_REQUEST_INTERVAL_SECONDS` を適切に設定してください。
 - モデルの性能は保存済みデータ量と過去戦績の充実度に大きく依存します。
 - `prod` モードと `IPAT_DRY_RUN=false` の組み合わせは実購入につながります。必ず実機で画面遷移と購入フローを確認してから使ってください。
-
-## ライセンス
-
-[MIT License](LICENSE)
