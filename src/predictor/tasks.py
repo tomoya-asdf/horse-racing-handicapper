@@ -325,6 +325,9 @@ def run_bet_decide(params: dict) -> str:
                 _refresh_race_odds(session, race, day_cache)
 
                 if not _has_complete_odds(race):
+                    # 取得できた単勝オッズ・馬体重は賭けの有無に関わらず残す
+                    # (session_scope は自動コミットしないため明示的に確定する)
+                    session.commit()
                     skipped_no_complete_odds += 1
                     continue
 
@@ -332,11 +335,15 @@ def run_bet_decide(params: dict) -> str:
                     session.query(Bet).filter_by(race_id=race.id, mode=config.mode).first()
                 )
                 if already_bet is not None:
+                    session.commit()  # 上記同様、更新した馬体重・オッズを確定する
                     skipped_already_bet += 1
                     continue
 
                 odds_by_type = scraper.fetch_supported_odds(race.race_key)
                 _save_race_odds(session, race, odds_by_type)
+                # 非単勝オッズ・馬体重は賭けが成立しなくても保存する(_place_bets が
+                # 呼ばれないと commit されず破棄されるため、ここで確定しておく)
+                session.commit()
                 bets = betting.decide_bets(race, predictions, config, odds_by_type=odds_by_type)
                 if bets:
                     new_bets += _place_bets(session, bets, config)
