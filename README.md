@@ -1,6 +1,6 @@
-# horse-racing-handicapper
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# horse-racing-handicapper
 
 競馬レースデータを収集し、AI 予想、買い目判定、結果反映を Web UI から操作するローカル運用向けアプリケーションです。
 

@@ -32,7 +32,7 @@ export const JOB_BUTTONS = JOB_OPTIONS.filter(
 export const LONG_BACKFILL = "long_backfill";
 export const RANGE_JOB_NAMES = new Set(["backfill", "backtest"]);
 export const BACKFILL_MAX_DAYS = 31;
-export const RESERVATION_PAGE_SIZE = 5;
+export const RESERVATION_PAGE_SIZE = 10;
 export const HISTORY_PAGE_SIZE = 15;
 
 export function isoDaysAgo(days: number): string {
