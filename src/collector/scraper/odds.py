@@ -1,6 +1,7 @@
 """JRAオッズAPI(api_get_jra_odds.html)から券種別オッズを取得する。"""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -85,8 +86,15 @@ def fetch_bet_type_odds(race_id: str, bet_type: str) -> dict[str, float]:
 
 
 def fetch_supported_odds(race_id: str) -> dict[str, dict[str, float]]:
-    """買い目判定で使う主要券種のオッズをまとめて取得する。"""
-    return {
-        bet_type: fetch_bet_type_odds(race_id, bet_type)
-        for bet_type in (BET_TYPE_WIN, BET_TYPE_PLACE, BET_TYPE_QUINELLA, BET_TYPE_WIDE)
-    }
+    """買い目判定で使う主要券種のオッズをまとめて取得する。
+
+    券種ごとに独立したAPI呼び出しのため並列に取得する。送出間隔はHTTPクライアント側の
+    スロットルで一定に保たれる(レートは1リクエスト/間隔のまま)ので、通信待ちが重なる
+    分だけ全体の所要時間が縮む。
+    """
+    bet_types = (BET_TYPE_WIN, BET_TYPE_PLACE, BET_TYPE_QUINELLA, BET_TYPE_WIDE)
+    with ThreadPoolExecutor(max_workers=len(bet_types)) as executor:
+        results = executor.map(
+            lambda bet_type: (bet_type, fetch_bet_type_odds(race_id, bet_type)), bet_types
+        )
+        return dict(results)

@@ -44,11 +44,15 @@ def _bet_decision_target_minutes(lead_minutes: int) -> int:
     return min(settings.BET_DECISION_WINDOW_MINUTES, lead_minutes)
 
 
-def _refresh_race_odds(session, race: Race, day_cache: dict) -> None:
-    """Refresh the target race snapshot so bet decisions use current win odds."""
-    if race.race_date not in day_cache:
-        day_cache[race.race_date] = scraper.fetch_upcoming_races(race.race_date)
-    latest = next((item for item in day_cache[race.race_date] if item["race_key"] == race.race_key), None)
+def _refresh_race_odds(session, race: Race, race_cache: dict) -> None:
+    """Refresh the target race snapshot so bet decisions use current win odds.
+
+    対象1レースだけを取りに行く(全場・全レースの再取得を避ける)。同一ジョブ内で
+    同じレースを複数回参照しても1回の取得で済むよう race_key で結果をキャッシュする。
+    """
+    if race.race_key not in race_cache:
+        race_cache[race.race_key] = scraper.fetch_single_race(race.race_key, race.race_date)
+    latest = race_cache[race.race_key]
     if latest is None:
         return
 
@@ -109,7 +113,7 @@ def _save_race_odds(session, race: Race, odds_by_type: dict[str, dict[str, float
     session.flush()
 
 
-def _refresh_race_day_inputs(session, race: Race, day_cache: dict) -> None:
+def _refresh_race_day_inputs(session, race: Race, race_cache: dict) -> None:
     """当日データ(単勝オッズ・馬体重・複勝/馬連/ワイドのオッズ)を取り込んで保存する。
 
     馬体重(当日計量)と全券種オッズは発走直前まで出ないため、発走が近いレースだけ
@@ -117,7 +121,7 @@ def _refresh_race_day_inputs(session, race: Race, day_cache: dict) -> None:
     自体が止まらないよう、失敗時はロールバックしてログのみとする(直近の保存値で予測)。
     """
     try:
-        _refresh_race_odds(session, race, day_cache)
+        _refresh_race_odds(session, race, race_cache)
         odds_by_type = scraper.fetch_supported_odds(race.race_key)
         _save_race_odds(session, race, odds_by_type)
         session.commit()
@@ -213,7 +217,7 @@ def run_predict(params: dict) -> str:
     repredicted_races = 0
     skipped_existing = 0
     failed_races = 0
-    day_cache: dict = {}
+    race_cache: dict = {}
     with session_scope() as session:
         races = (
             session.query(Race)
@@ -225,16 +229,26 @@ def run_predict(params: dict) -> str:
             )
             .all()
         )
-        history = load_horse_history(session)
-        sire_map = load_sire_map(session)
-        jockey_history = load_jockey_history(session)
-        trainer_history = load_trainer_history(session)
+        races = [race for race in races if _is_unfinished_race(race)]
+        if not races:
+            # 対象レースが無ければ、重い履歴ロード(全馬・全騎手・全調教師)を行わず即終了する
+            return (
+                "対象未確定レース=0件, 新規予測=0件, 当日再予測=0件, 既存予測あり=0件"
+            )
+
+        # 予測に必要なのは対象レースの出走馬・関係者だけ。全件ではなくIDで絞って
+        # 履歴をロードし、データ増加に伴う毎回のフルスキャンを避ける。
+        horse_ids = {e.horse_id for race in races for e in race.entries if e.horse_id}
+        jockey_ids = {e.jockey_id for race in races for e in race.entries if e.jockey_id}
+        trainer_ids = {e.trainer_id for race in races for e in race.entries if e.trainer_id}
+        history = load_horse_history(session, horse_ids)
+        sire_map = load_sire_map(session, horse_ids)
+        jockey_history = load_jockey_history(session, jockey_ids)
+        trainer_history = load_trainer_history(session, trainer_ids)
         finalize_cutoff = now_jst() + timedelta(
             minutes=settings.RACE_DAY_FINALIZE_WINDOW_MINUTES
         )
         for race in races:
-            if not _is_unfinished_race(race):
-                continue
             target_races += 1
             try:
                 existing = (
@@ -247,7 +261,7 @@ def run_predict(params: dict) -> str:
                 # 再予測する(馬体重は特徴量のため、未取得時に出した予測を出し直す)。
                 in_finalize_window = race.start_time <= finalize_cutoff
                 if in_finalize_window:
-                    _refresh_race_day_inputs(session, race, day_cache)
+                    _refresh_race_day_inputs(session, race, race_cache)
                 elif existing:
                     skipped_existing += 1
                     continue
@@ -298,7 +312,7 @@ def run_bet_decide(params: dict) -> str:
         else settings.BET_DECISION_LEAD_MINUTES
     )
     target_minutes = _bet_decision_target_minutes(lead_minutes)
-    day_cache: dict = {}
+    race_cache: dict = {}
 
     with session_scope() as session:
         races = (
@@ -323,7 +337,7 @@ def run_bet_decide(params: dict) -> str:
                     skipped_no_predictions += 1
                     continue
 
-                _refresh_race_odds(session, race, day_cache)
+                _refresh_race_odds(session, race, race_cache)
 
                 if not _has_complete_odds(race):
                     # 取得できた単勝オッズ・馬体重は賭けの有無に関わらず残す

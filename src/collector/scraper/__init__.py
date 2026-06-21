@@ -34,7 +34,7 @@ from src.collector.scraper.odds import (
     fetch_quinella_odds,
     fetch_supported_odds,
 )
-from src.collector.scraper.races import fetch_upcoming_races
+from src.collector.scraper.races import fetch_single_race, fetch_upcoming_races
 from src.collector.scraper.rendered import RenderedOddsClient
 from src.collector.scraper.results import fetch_race_results
 
@@ -54,6 +54,7 @@ __all__ = [
     "normalize_combination",
     "fetch_kaisai_dates",
     "fetch_upcoming_races",
+    "fetch_single_race",
     "fetch_race_results",
     "fetch_horse_results",
     "fetch_horse_pedigree_full",

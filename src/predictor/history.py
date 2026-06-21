@@ -41,25 +41,29 @@ def season_features(race_date: date | None) -> tuple[float, float]:
     return math.sin(angle), math.cos(angle)
 
 
-def load_horse_history(session) -> dict[str, pd.DataFrame]:
-    """全馬の過去成績を horse_id ごとの DataFrame にまとめて返す。
+def load_horse_history(
+    session, horse_ids: "list[str] | set[str] | None" = None
+) -> dict[str, pd.DataFrame]:
+    """馬の過去成績を horse_id ごとの DataFrame にまとめて返す。
 
     レースごとにDBへ問い合わせると遅いため、学習/予測の開始時に一括ロードして
-    メモリ上で日付フィルタする。
+    メモリ上で日付フィルタする。``horse_ids`` を渡すとその馬だけに絞ってロードする
+    (予測は対象レースの出走馬のみで足り、全件スキャンを避けられる)。None なら全件。
     """
-    rows = (
-        session.query(
-            HorseResult.horse_id,
-            HorseResult.race_date,
-            HorseResult.finish_position,
-            HorseResult.distance,
-            HorseResult.track_type,
-            HorseResult.going,
-            HorseResult.last_3f,
-        )
-        .filter(HorseResult.horse_id.isnot(None))
-        .all()
-    )
+    if horse_ids is not None and not horse_ids:
+        return {}
+    query = session.query(
+        HorseResult.horse_id,
+        HorseResult.race_date,
+        HorseResult.finish_position,
+        HorseResult.distance,
+        HorseResult.track_type,
+        HorseResult.going,
+        HorseResult.last_3f,
+    ).filter(HorseResult.horse_id.isnot(None))
+    if horse_ids is not None:
+        query = query.filter(HorseResult.horse_id.in_(list(horse_ids)))
+    rows = query.all()
     if not rows:
         return {}
 
@@ -83,21 +87,36 @@ def load_horse_history(session) -> dict[str, pd.DataFrame]:
     return history
 
 
-def load_sire_map(session) -> dict[str, str]:
-    """horse_id -> sire_id(父の馬ID)のマップを返す。血統(父)特徴量に使う。"""
-    rows = session.query(Horse.horse_id, Horse.sire_id).filter(Horse.sire_id.isnot(None)).all()
-    return {str(horse_id): str(sire_id) for horse_id, sire_id in rows}
+def load_sire_map(
+    session, horse_ids: "list[str] | set[str] | None" = None
+) -> dict[str, str]:
+    """horse_id -> sire_id(父の馬ID)のマップを返す。血統(父)特徴量に使う。
+
+    ``horse_ids`` を渡すとその馬だけに絞る(予測の出走馬のみ)。None なら全件。
+    """
+    if horse_ids is not None and not horse_ids:
+        return {}
+    query = session.query(Horse.horse_id, Horse.sire_id).filter(Horse.sire_id.isnot(None))
+    if horse_ids is not None:
+        query = query.filter(Horse.horse_id.in_(list(horse_ids)))
+    return {str(horse_id): str(sire_id) for horse_id, sire_id in query.all()}
 
 
-def _load_person_history_from_entries(session, id_column: str) -> dict[str, pd.DataFrame]:
+def _load_person_history_from_entries(
+    session, id_column: str, person_ids: "list[str] | set[str] | None" = None
+) -> dict[str, pd.DataFrame]:
     """騎手/調教師の履歴を、収集済みの出走表(entries × races)から直接組み立てる。
 
     騎手・調教師は多くのレースに騎乗/出走するため、自前に蓄積した確定レース
     (finish_position あり)だけで recent10 等の近走特徴量を十分カバーできる
     (個別ページのスクレイピングは不要)。距離・馬場はレース側(``races``)から取る。
+
+    ``person_ids`` を渡すとその騎手/調教師だけに絞る(予測の出走馬の関係者のみ)。
     """
+    if person_ids is not None and not person_ids:
+        return {}
     person_id = getattr(Entry, id_column)
-    rows = (
+    query = (
         session.query(
             person_id,
             Race.race_date,
@@ -108,8 +127,10 @@ def _load_person_history_from_entries(session, id_column: str) -> dict[str, pd.D
         )
         .join(Race, Race.id == Entry.race_id)
         .filter(person_id.isnot(None), Entry.finish_position.isnot(None))
-        .all()
     )
+    if person_ids is not None:
+        query = query.filter(person_id.in_(list(person_ids)))
+    rows = query.all()
     if not rows:
         return {}
 
@@ -124,12 +145,16 @@ def _load_person_history_from_entries(session, id_column: str) -> dict[str, pd.D
     return history
 
 
-def load_jockey_history(session) -> dict[str, pd.DataFrame]:
-    return _load_person_history_from_entries(session, "jockey_id")
+def load_jockey_history(
+    session, jockey_ids: "list[str] | set[str] | None" = None
+) -> dict[str, pd.DataFrame]:
+    return _load_person_history_from_entries(session, "jockey_id", jockey_ids)
 
 
-def load_trainer_history(session) -> dict[str, pd.DataFrame]:
-    return _load_person_history_from_entries(session, "trainer_id")
+def load_trainer_history(
+    session, trainer_ids: "list[str] | set[str] | None" = None
+) -> dict[str, pd.DataFrame]:
+    return _load_person_history_from_entries(session, "trainer_id", trainer_ids)
 
 
 def _empty_features() -> dict[str, float]:

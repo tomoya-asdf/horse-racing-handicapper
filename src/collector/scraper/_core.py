@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -16,6 +17,28 @@ import requests
 from src.common.config import settings
 
 logger = logging.getLogger(__name__)
+
+# リクエスト送出の最小間隔を守るためのゲート。「リクエスト後に固定秒スリープ」だと
+# 通信時間に加えて毎回まるごと待つうえ、最後の1件やキャッシュ的成功にも待ちが入る。
+# 「直近の送出からの最小間隔」に置き換えることで通信時間を間隔に算入でき、無駄待ちを
+# 減らせる。ロックで直列化するため、複数スレッドからの並列取得でも送出レート
+# (= 1リクエスト / SCRAPER_REQUEST_INTERVAL_SECONDS)を保てる。
+_rate_lock = threading.Lock()
+_next_request_at = 0.0
+
+
+def _throttle() -> None:
+    interval = settings.SCRAPER_REQUEST_INTERVAL_SECONDS
+    if interval <= 0:
+        return
+    global _next_request_at
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _next_request_at - now
+        if wait > 0:
+            time.sleep(wait)
+            now += wait
+        _next_request_at = now + interval
 
 BASE_URL = "https://race.netkeiba.com"
 # 馬の過去成績は db.netkeiba.com の馬ページにある(レース系とはホストが異なる)
@@ -106,6 +129,8 @@ class NetkeibaHttpClient:
         last_exc: Exception | None = None
         for attempt in range(attempts):
             try:
+                # 送出前に最小間隔を確保する(リトライも含め各送出を一定間隔に保つ)。
+                _throttle()
                 response = self.session.get(url, timeout=10, **kwargs)
                 _metrics.http_requests += 1
                 if response.status_code in _RETRYABLE_STATUS and attempt < attempts - 1:
@@ -118,7 +143,6 @@ class NetkeibaHttpClient:
                     # 文字化けする。さらにページによりUTF-8(レース一覧)とEUC-JP(出馬表・
                     # 結果)が混在するため、決め打ちせず内容から自動判定する
                     response.encoding = response.apparent_encoding
-                time.sleep(settings.SCRAPER_REQUEST_INTERVAL_SECONDS)
                 return response
             except (requests.exceptions.RequestException, _RetryableStatus) as exc:
                 last_exc = exc
