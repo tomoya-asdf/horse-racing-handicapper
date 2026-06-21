@@ -8,6 +8,7 @@ import logging
 from datetime import timedelta
 
 from src.collector import scraper
+from src.collector.races_store import update_finished_results
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import session_scope
@@ -367,8 +368,11 @@ def run_bet_decide(params: dict) -> str:
 
 
 def run_settle(params: dict) -> str:
+    # 買いの有無に関わらず、発走後レースの着順・確定オッズ・馬体重を反映してから
+    # (未確定→確定への状態変化)、購入済みレースの払戻を確定する。
+    reflected = update_finished_results()
     settled = settlement.settle_pending_races()
-    return f"決済={settled}件"
+    return f"結果反映={reflected}件, 決済={settled}件"
 
 
 def run_train(params: dict) -> str:

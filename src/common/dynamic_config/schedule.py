@@ -3,12 +3,16 @@
 from datetime import datetime, timedelta
 
 from src.common.db import session_scope
-from src.common.models import Bet, BetStatus, JobRun, JobTrigger, Race
+from src.common.models import Entry, JobRun, JobTrigger, Race
 from src.common.timeutils import now_jst
 
 from .defaults import SCHEDULED_JOB_DEFS
 from .parsing import parse_exact_time, weekdays_from_str
 from .store import merged_settings
+
+# 発走後・未確定レースの結果反映を起動する期間。collector の RESULT_FETCH_DAYS に合わせる
+# (common は collector に依存させないため定数を再掲する)。
+_SETTLE_RESULT_WINDOW_DAYS = 7
 
 
 def _latest_scheduled_started_at(session, job_name: str) -> datetime | None:
@@ -45,11 +49,12 @@ def _next_settle_run_at(session, after_start_minutes: int) -> datetime | None:
     now = now_jst()
     row = (
         session.query(Race.start_time)
-        .join(Bet, Bet.race_id == Race.id)
         .filter(
-            Bet.is_settled.is_(False),
-            Bet.status == BetStatus.PLACED.value,
             Race.start_time.isnot(None),
+            Race.start_time < now,
+            Race.race_date >= (now - timedelta(days=_SETTLE_RESULT_WINDOW_DAYS)).date(),
+            Race.entries.any(),
+            ~Race.entries.any(Entry.finish_position.isnot(None)),
         )
         .order_by(Race.start_time)
         .first()

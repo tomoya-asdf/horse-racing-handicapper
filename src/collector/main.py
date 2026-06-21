@@ -23,6 +23,7 @@ from src.common import jobs
 from src.common.config import settings
 from src.common.db import init_db
 from src.common.dynamic_config import load_scheduled_job_config
+from src.common.scheduling_priority import betting_priority_active
 from src.common.timeutils import now_jst
 
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +85,9 @@ def _scheduled_collect() -> None:
     config = load_scheduled_job_config(jobs.COLLECT)
     if config is None or not config.enabled:
         return
+    if betting_priority_active():
+        logger.info("発走が近いため data collection を待避します(賭け対象決定を優先)")
+        return
     if not jobs.scheduled_run_due(
         jobs.COLLECT,
         config.interval_minutes,
@@ -97,6 +101,9 @@ def _scheduled_collect() -> None:
 def _scheduled_collect_horses() -> None:
     config = load_scheduled_job_config(jobs.COLLECT_HORSES)
     if config is None or not config.enabled:
+        return
+    if betting_priority_active():
+        logger.info("発走が近いため horse results collection を待避します(賭け対象決定を優先)")
         return
     if not jobs.scheduled_run_due(
         jobs.COLLECT_HORSES,

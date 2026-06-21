@@ -7,11 +7,13 @@
 import logging
 from datetime import timedelta
 
+from src.collector.races_store import RESULT_FETCH_DAYS
 from src.common import jobs
 from src.common.config import settings
 from src.common.db import session_scope
 from src.common.dynamic_config import load_scheduled_job_config
-from src.common.models import Bet, BetStatus, Entry, Race
+from src.common.models import Entry, Race
+from src.common.scheduling_priority import betting_priority_active
 from src.common.timeutils import now_jst
 from src.predictor.tasks import run_bet_decide, run_predict, run_settle, run_train
 
@@ -37,14 +39,22 @@ def _next_bet_decide_due_at(lead_minutes: int):
 
 
 def _next_settle_due_at(delay_minutes: int):
+    """発走後・未確定のレースがあれば、最も早い発走時刻 + 遅延を返す。
+
+    買いの有無に関わらず発走後レースの結果反映(run_settle)を起動させるため、
+    Bet ではなく未確定レースを基準にする。結果が取得できないまま居座る中止
+    レースで起動し続けないよう、結果取得期間(RESULT_FETCH_DAYS)内に限定する。
+    """
+    now = now_jst()
     with session_scope() as session:
         row = (
             session.query(Race.start_time)
-            .join(Bet, Bet.race_id == Race.id)
             .filter(
-                Bet.is_settled.is_(False),
-                Bet.status == BetStatus.PLACED.value,
                 Race.start_time.isnot(None),
+                Race.start_time < now,
+                Race.race_date >= (now - timedelta(days=RESULT_FETCH_DAYS)).date(),
+                Race.entries.any(),
+                ~Race.entries.any(Entry.finish_position.isnot(None)),
             )
             .order_by(Race.start_time)
             .first()
@@ -57,6 +67,9 @@ def _next_settle_due_at(delay_minutes: int):
 def scheduled_predict() -> None:
     config = load_scheduled_job_config(jobs.PREDICT)
     if config is None or not config.enabled:
+        return
+    if betting_priority_active():
+        logger.info("発走が近いため predict を待避します(賭け対象決定を優先)")
         return
     if not jobs.scheduled_run_due(
         jobs.PREDICT,
@@ -121,6 +134,9 @@ def scheduled_settle() -> None:
 def scheduled_train() -> None:
     config = load_scheduled_job_config(jobs.TRAIN)
     if config is None or not config.enabled:
+        return
+    if betting_priority_active():
+        logger.info("発走が近いため train を待避します(賭け対象決定を優先)")
         return
     if not jobs.scheduled_run_due(
         jobs.TRAIN,

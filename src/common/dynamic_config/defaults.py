@@ -57,7 +57,7 @@ SCHEDULED_JOB_DEFS = (
         "time_key": "schedule_settle_time",
         "days_key": "schedule_settle_days",
         "label": "決済",
-        "description": "購入済みレースの発走時刻を基準に、指定分後から払戻を確認します。",
+        "description": "発走後のレースを対象に、指定分後から着順・確定オッズの反映(未確定→確定)と購入済みレースの払戻確認を行います。",
         "default_after": settings.SETTLE_DELAY_MINUTES,
     },
     {
