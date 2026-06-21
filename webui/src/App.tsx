@@ -152,8 +152,15 @@ export default function App() {
     <div className="app">
       {!detailPageOpen && <header className="header">
         <h1>
-          <img className="header-logo" src="/favicon.svg" alt="" aria-hidden="true" />
-          競馬予測AI <span className="header-sub">（プロトタイプ）</span>
+          <button
+            type="button"
+            className="header-title"
+            onClick={() => selectTab("overview")}
+            aria-label="概要ページへ移動"
+          >
+            <img className="header-logo" src="/favicon.svg" alt="" aria-hidden="true" />
+            競馬予測AI<span className="header-sub">（プロトタイプ）</span>
+          </button>
         </h1>
         <div className="header-nav">
           <nav className="tabs">
