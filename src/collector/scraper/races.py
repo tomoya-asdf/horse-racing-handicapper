@@ -282,6 +282,96 @@ def _parse_race_class(soup: BeautifulSoup) -> str | None:
     return " ".join(parts) if parts else None
 
 
+def _build_race_detail(
+    race_id: str,
+    target_date: date,
+    now: datetime,
+    include_started: bool,
+    rendered_state: dict,
+) -> dict | None:
+    """1レース分の出馬表・オッズを取得して保存用の辞書を返す(取得不可ならNone)。
+
+    ``rendered_state`` は {"client": RenderedOddsClient|None} で、Playwright
+    クライアントを呼び出し側でまとめて使い回す/後始末するための受け皿。
+    """
+    response = _get(f"{BASE_URL}/race/shutuba.html", params={"race_id": race_id})
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    entries = _parse_entry_rows(soup)
+    if not entries:
+        logger.warning("no entries parsed for race_id=%s, skip", race_id)
+        return None
+
+    start_time = _parse_start_time(soup, target_date)
+    if not include_started and start_time is not None and start_time <= now:
+        return None
+
+    # オッズは2系統: JRAオッズAPI(発走当日に確定値が出る)を最優先とし、
+    # まだ確定オッズが無い未確定レースでは出馬表の予想オッズ(_parse_row_oddsで
+    # 取得済み)を残す。人気だけ欠ける場合はオッズ順で補完し、ブラウザ描画は
+    # オッズ自体が欠けている時だけ使う。
+    odds_map = _fetch_win_odds(race_id)
+    for entry in entries:
+        api_odds = odds_map.get(f"{entry['horse_number']:02d}")
+        if api_odds is not None:
+            entry["odds"] = api_odds
+    _fill_popularity(entries)
+
+    if _needs_rendered_odds(entries):
+        rendered_odds = {}
+        try:
+            if rendered_state.get("client") is None:
+                rendered_state["client"] = RenderedOddsClient()
+            rendered_odds = rendered_state["client"].fetch_win_odds(race_id)
+        except ImportError:
+            logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
+        except Exception as exc:
+            logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
+        for entry in entries:
+            rendered_entry = rendered_odds.get(entry["horse_number"])
+            if not rendered_entry:
+                continue
+            if rendered_entry.get("odds") is not None:
+                entry["odds"] = rendered_entry["odds"]
+            if rendered_entry.get("popularity") is not None:
+                entry["popularity"] = rendered_entry["popularity"]
+        _fill_popularity(entries)
+
+    info = parse_race_key(race_id)
+    return {
+        "race_key": race_id,
+        "race_date": target_date,
+        "venue": info["venue"],
+        "race_number": info["race_number"],
+        "race_name": _parse_race_name(soup),
+        "start_time": start_time,
+        "entries": entries,
+        **_parse_race_conditions(soup),
+    }
+
+
+def fetch_single_race(
+    race_id: str, target_date: date, include_started: bool = True
+) -> dict | None:
+    """単一レースの出馬表・オッズだけを取得する(発走直前の再予測・賭け判定用)。
+
+    1レースの最新化のために ``fetch_upcoming_races`` で全場・全レースを取り直すと
+    数十リクエストかかるため、対象レースだけを取りに行く軽量版。既定では発走済み
+    でも取得する(直前で発走時刻を跨いでも最新オッズを拾うため)。取得不可ならNone。
+    """
+    rendered_state: dict = {"client": None}
+    try:
+        return _build_race_detail(
+            race_id, target_date, now_jst(), include_started, rendered_state
+        )
+    except requests.RequestException as exc:
+        logger.warning("failed to fetch race_id=%s: %s", race_id, exc)
+        return None
+    finally:
+        if rendered_state["client"] is not None:
+            rendered_state["client"].close()
+
+
 def fetch_upcoming_races(target_date: date, include_started: bool = False) -> list[dict]:
     """指定日に開催されるレースの出走馬・オッズ情報を取得する。
 
@@ -294,73 +384,22 @@ def fetch_upcoming_races(target_date: date, include_started: bool = False) -> li
     started_at = time.perf_counter()
     now = now_jst()
     races: list[dict] = []
-    rendered_client: RenderedOddsClient | None = None
+    rendered_state: dict = {"client": None}
 
     try:
         for race_id in _find_race_ids(target_date):
             try:
-                response = _get(f"{BASE_URL}/race/shutuba.html", params={"race_id": race_id})
-                soup = BeautifulSoup(response.text, "html.parser")
-
-                entries = _parse_entry_rows(soup)
-                if not entries:
-                    logger.warning("no entries parsed for race_id=%s, skip", race_id)
-                    continue
-
-                start_time = _parse_start_time(soup, target_date)
-                if not include_started and start_time is not None and start_time <= now:
-                    continue
-
-                # オッズは2系統: JRAオッズAPI(発走当日に確定値が出る)を最優先とし、
-                # まだ確定オッズが無い未確定レースでは出馬表の予想オッズ(_parse_row_oddsで
-                # 取得済み)を残す。人気だけ欠ける場合はオッズ順で補完し、ブラウザ描画は
-                # オッズ自体が欠けている時だけ使う。
-                odds_map = _fetch_win_odds(race_id)
-                for entry in entries:
-                    api_odds = odds_map.get(f"{entry['horse_number']:02d}")
-                    if api_odds is not None:
-                        entry["odds"] = api_odds
-                _fill_popularity(entries)
-
-                if _needs_rendered_odds(entries):
-                    rendered_odds = {}
-                    try:
-                        if rendered_client is None:
-                            rendered_client = RenderedOddsClient()
-                        rendered_odds = rendered_client.fetch_win_odds(race_id)
-                    except ImportError:
-                        logger.warning("playwright is not installed; skip rendered odds for race_id=%s", race_id)
-                    except Exception as exc:
-                        logger.warning("failed to fetch rendered odds for race_id=%s: %s", race_id, exc)
-                    for entry in entries:
-                        rendered_entry = rendered_odds.get(entry["horse_number"])
-                        if not rendered_entry:
-                            continue
-                        if rendered_entry.get("odds") is not None:
-                            entry["odds"] = rendered_entry["odds"]
-                        if rendered_entry.get("popularity") is not None:
-                            entry["popularity"] = rendered_entry["popularity"]
-                    _fill_popularity(entries)
-
-                info = parse_race_key(race_id)
-                races.append(
-                    {
-                        "race_key": race_id,
-                        "race_date": target_date,
-                        "venue": info["venue"],
-                        "race_number": info["race_number"],
-                        "race_name": _parse_race_name(soup),
-                        "start_time": start_time,
-                        "entries": entries,
-                        **_parse_race_conditions(soup),
-                    }
+                race = _build_race_detail(
+                    race_id, target_date, now, include_started, rendered_state
                 )
+                if race is not None:
+                    races.append(race)
             except requests.RequestException as exc:
                 logger.warning("failed to fetch race_id=%s: %s", race_id, exc)
                 continue
     finally:
-        if rendered_client is not None:
-            rendered_client.close()
+        if rendered_state["client"] is not None:
+            rendered_state["client"].close()
         _log_metrics(
             f"fetch_upcoming_races date={target_date} include_started={include_started} races={len(races)}",
             started_at,
